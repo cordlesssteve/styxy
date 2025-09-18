@@ -190,12 +190,12 @@ Styxy automatically loads configuration from **CORE documentation** (`~/docs/COR
 
 ### Technical Reference
 - **[Architecture](./docs/reference/01-architecture/)** - System design and architecture details
-- **[APIs](./docs/reference/02-apis/)** - HTTP REST API and CLI interface documentation
-- **[Development](./docs/reference/03-development/)** - Development setup and contribution guidelines
-- **[Deployment](./docs/reference/04-deployment/)** - Installation and configuration guides
+- **[API Reference](./docs/reference/02-apis/api-reference.md)** - Complete HTTP REST API and CLI documentation
+- **[Development Guide](./docs/reference/03-development/development-guide.md)** - Setup, testing, and contribution guidelines
+- **[Installation & Deployment](./docs/reference/04-deployment/installation-deployment.md)** - Installation, configuration, and production deployment
 - **[Security](./docs/reference/05-security/)** - Security model and considerations
 - **[Integrations](./docs/reference/06-integrations/)** - CORE documentation and external system integration
-- **[Troubleshooting](./docs/reference/07-troubleshooting/)** - Common issues and debugging guides
+- **[Troubleshooting Guide](./docs/reference/07-troubleshooting/troubleshooting-guide.md)** - Common issues, debugging, and solutions
 - **[Performance](./docs/reference/08-performance/)** - Performance characteristics and optimization
 - **[Compliance](./docs/reference/09-compliance/)** - Standards adherence and audit documentation
 
