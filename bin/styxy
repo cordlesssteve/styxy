@@ -1,0 +1,9 @@
+#!/usr/bin/env node
+
+/**
+ * Styxy CLI Entry Point
+ * 
+ * Simple wrapper that loads the main CLI application
+ */
+
+require('../src/index.js');
