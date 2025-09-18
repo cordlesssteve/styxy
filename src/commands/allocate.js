@@ -24,6 +24,9 @@ async function allocate(options) {
 
     if (options.json) {
       console.log(JSON.stringify(result));
+      if (!result.success) {
+        process.exit(1);
+      }
       return;
     }
 

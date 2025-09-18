@@ -2,22 +2,29 @@
  * List allocations command
  */
 
-async function list(options) {
+const { daemonRequest } = require('../utils/daemon-client');
+
+async function list(options = {}) {
   try {
-    const response = await fetch('http://127.0.0.1:9876/allocations');
+    const response = await daemonRequest('/allocations');
     const result = await response.json();
-    
+
+    if (options.json) {
+      console.log(JSON.stringify(result));
+      return;
+    }
+
     if (result.allocations.length === 0) {
       console.log('No active port allocations');
       return;
     }
-    
+
     console.log('\nActive Port Allocations:');
     console.log('=' .repeat(50));
-    
+
     result.allocations.forEach(allocation => {
       console.log(`Port ${allocation.port}: ${allocation.service_type}`);
-      
+
       if (options.verbose) {
         console.log(`  Service Name: ${allocation.service_name || 'unnamed'}`);
         console.log(`  Lock ID: ${allocation.lock_id}`);
@@ -29,13 +36,13 @@ async function list(options) {
         console.log('');
       }
     });
-    
+
     if (!options.verbose) {
       console.log(`\nTotal: ${result.allocations.length} allocations (use -v for details)`);
     }
   } catch (error) {
-    if (error.code === 'ECONNREFUSED') {
-      console.error('❌ Styxy daemon is not running. Start it with: styxy daemon start');
+    if (options.json) {
+      console.log(JSON.stringify({ success: false, error: error.message }));
     } else {
       console.error(`❌ Error: ${error.message}`);
     }

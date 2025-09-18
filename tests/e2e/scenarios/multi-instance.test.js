@@ -148,11 +148,11 @@ describe('Multi-Instance Coordination', () => {
         const systemCheck = await cli.check(systemPort);
 
         expect(styxyCheck.success).toBe(true);
-        expect(styxyCheck.stdout).toContain('allocated to Styxy');
+        expect(styxyCheck.stdout).toContain('Styxy Allocation');
         expect(styxyCheck.stdout).toContain('styxy-service');
 
         expect(systemCheck.success).toBe(true);
-        expect(systemCheck.stdout).toContain('in use by system');
+        expect(systemCheck.stdout).toContain('is in use');
       });
     });
   });
@@ -185,7 +185,7 @@ describe('Multi-Instance Coordination', () => {
       expect(allocation.service_name).toBe('persistence-test');
 
       // Verify through CLI
-      const listResult = await cli.list();
+      const listResult = await cli.list({ verbose: true });
       expect(listResult.success).toBe(true);
       expect(listResult.stdout).toContain('persistence-test');
     });

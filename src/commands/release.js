@@ -2,13 +2,23 @@
  * Release port allocation command
  */
 
-async function release(lockId) {
+const { daemonRequest } = require('../utils/daemon-client');
+
+async function release(lockId, options = {}) {
   try {
-    const response = await fetch(`http://127.0.0.1:9876/allocate/${lockId}`, {
+    const response = await daemonRequest(`/allocate/${lockId}`, {
       method: 'DELETE'
     });
 
     const result = await response.json();
+
+    if (options.json) {
+      console.log(JSON.stringify(result));
+      if (!result.success) {
+        process.exit(1);
+      }
+      return;
+    }
 
     if (result.success) {
       console.log(`✅ ${result.message}`);
@@ -17,8 +27,8 @@ async function release(lockId) {
       process.exit(1);
     }
   } catch (error) {
-    if (error.code === 'ECONNREFUSED') {
-      console.error('❌ Styxy daemon is not running. Start it with: styxy daemon start');
+    if (options.json) {
+      console.log(JSON.stringify({ success: false, error: error.message }));
     } else {
       console.error(`❌ Error: ${error.message}`);
     }

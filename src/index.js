@@ -65,6 +65,7 @@ program
   .command('release')
   .description('Release a port allocation')
   .argument('<lockId>', 'Lock ID to release')
+  .option('--json', 'Output result as JSON')
   .action(require('./commands/release'));
 
 // Cleanup stale allocations
@@ -72,6 +73,7 @@ program
   .command('cleanup')
   .description('Clean up stale port allocations')
   .option('-f, --force', 'Force cleanup of all allocations')
+  .option('--json', 'Output result as JSON')
   .action(cleanup);
 
 // Port scan
@@ -80,12 +82,14 @@ program
   .description('Scan for ports in use (system and Styxy allocations)')
   .option('-s, --start <port>', 'Start port number (default: 3000)', '3000')
   .option('-e, --end <port>', 'End port number (default: 9999)', '9999')
+  .option('--json', 'Output result as JSON')
   .action(require('./commands/scan'));
 
 // Instance management
 program
   .command('instances')
   .description('List active Styxy instances')
+  .option('--json', 'Output result as JSON')
   .action(require('./commands/instances'));
 
 // Configuration management

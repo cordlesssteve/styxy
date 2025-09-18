@@ -61,7 +61,7 @@ class TestCliHelper {
   async runJson(args = [], options = {}) {
     const result = await this.run([...args, '--json'], options);
 
-    if (result.success && result.stdout) {
+    if (result.stdout) {
       try {
         result.json = JSON.parse(result.stdout);
       } catch (error) {

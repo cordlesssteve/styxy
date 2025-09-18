@@ -2,15 +2,24 @@
  * Port scan command
  */
 
-async function scan(options) {
+const { daemonRequest } = require('../utils/daemon-client');
+
+async function scan(options = {}) {
   try {
     const startPort = options.start || 3000;
     const endPort = options.end || 9999;
 
-    console.log(`🔍 Scanning ports ${startPort}-${endPort} for usage...`);
+    if (!options.json) {
+      console.log(`🔍 Scanning ports ${startPort}-${endPort} for usage...`);
+    }
 
-    const response = await fetch(`http://127.0.0.1:9876/scan?start=${startPort}&end=${endPort}`);
+    const response = await daemonRequest(`/scan?start=${startPort}&end=${endPort}`);
     const result = await response.json();
+
+    if (options.json) {
+      console.log(JSON.stringify(result));
+      return;
+    }
 
     if (result.ports_in_use.length === 0) {
       console.log(`✅ No ports in use in range ${result.scan_range}`);
@@ -58,8 +67,8 @@ async function scan(options) {
     }
 
   } catch (error) {
-    if (error.code === 'ECONNREFUSED') {
-      console.error('❌ Styxy daemon is not running. Start it with: styxy daemon start');
+    if (options.json) {
+      console.log(JSON.stringify({ success: false, error: error.message }));
     } else {
       console.error(`❌ Error: ${error.message}`);
     }
