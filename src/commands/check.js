@@ -10,12 +10,33 @@ async function check(port) {
     if (result.available) {
       console.log(`✅ Port ${port} is available`);
     } else {
-      console.log(`❌ Port ${port} is allocated`);
+      console.log(`❌ Port ${port} is in use`);
+
+      // Show Styxy allocation if exists
       if (result.allocated_to) {
         const allocation = result.allocated_to;
-        console.log(`   Service: ${allocation.service_type}`);
-        console.log(`   Name: ${allocation.service_name || 'unnamed'}`);
-        console.log(`   Allocated: ${allocation.allocated_at}`);
+        console.log(`\n   📋 Styxy Allocation:`);
+        console.log(`      Service: ${allocation.service_type}`);
+        console.log(`      Name: ${allocation.service_name || 'unnamed'}`);
+        console.log(`      Allocated: ${allocation.allocated_at}`);
+        console.log(`      Lock ID: ${allocation.lock_id}`);
+      }
+
+      // Show system usage if detected
+      if (result.system_usage) {
+        const usage = result.system_usage;
+        console.log(`\n   🖥️  System Usage:`);
+        console.log(`      Protocol: ${usage.protocol || 'unknown'}`);
+        if (usage.process && usage.process.name) {
+          console.log(`      Process: ${usage.process.name}`);
+        }
+        if (usage.process && usage.process.pid) {
+          console.log(`      PID: ${usage.process.pid}`);
+        }
+        console.log(`      Detected by: ${usage.tool}`);
+        if (usage.local_address) {
+          console.log(`      Address: ${usage.local_address}`);
+        }
       }
     }
   } catch (error) {

@@ -16,8 +16,11 @@ styxy daemon start
 # Allocate a port for your development server
 styxy allocate --service dev --port 8000
 
-# Check port availability
+# Check port availability (with detailed system info)
 styxy check 8000
+
+# Scan for ports in use
+styxy scan --start 3000 --end 9000
 
 # Stop the daemon
 styxy daemon stop
@@ -83,8 +86,10 @@ styxy allocate --service test               # Get suggested port
 styxy release <lock-id>                     # Release allocation
 styxy check <port>                          # Check availability
 
-# Information
+# Information & Monitoring
 styxy list                   # List all allocations
+styxy scan                   # Scan for ports in use (system + Styxy)
+styxy check <port>          # Detailed port availability & usage info
 styxy instances             # Show active instances
 styxy cleanup               # Force cleanup stale locks
 ```
@@ -130,10 +135,22 @@ Styxy uses `~/.styxy/config.json`:
 
 ## 📖 Documentation
 
-- [Design Document](./docs/DESIGN.md) - Comprehensive architecture and implementation details
-- [API Reference](./docs/API.md) - Complete HTTP and CLI API documentation
-- [Configuration Guide](./docs/CONFIGURATION.md) - Setup and customization options
-- [Contributing](./CONTRIBUTING.md) - Development setup and contribution guidelines
+### Project Status
+- **[Current Status](./CURRENT_STATUS.md)** - Real-time project status and progress
+- **[Active Plan](./ACTIVE_PLAN.md)** - Current development priorities and tasks
+
+### Technical Reference
+- **[Architecture](./docs/reference/01-architecture/)** - System design and architecture details
+- **[APIs](./docs/reference/02-apis/)** - HTTP REST API and CLI interface documentation
+- **[Development](./docs/reference/03-development/)** - Development setup and contribution guidelines
+- **[Deployment](./docs/reference/04-deployment/)** - Installation and configuration guides
+- **[Security](./docs/reference/05-security/)** - Security model and considerations
+- **[Integrations](./docs/reference/06-integrations/)** - CORE documentation and external system integration
+- **[Troubleshooting](./docs/reference/07-troubleshooting/)** - Common issues and debugging guides
+- **[Performance](./docs/reference/08-performance/)** - Performance characteristics and optimization
+- **[Compliance](./docs/reference/09-compliance/)** - Standards adherence and audit documentation
+
+> **Documentation Standard**: This project follows the [Universal Project Documentation Standard v2.0](https://docs.example.com/standards/docs) for consistent, status-driven documentation management.
 
 ## 🤝 Contributing
 
@@ -151,6 +168,6 @@ MIT License - see [LICENSE](./LICENSE) file for details.
 
 ---
 
-**Status**: 🚧 In Development
+**Status**: ✅ Production Ready
 
-Styxy is currently in active development. The architecture is designed and the foundation is being implemented. See [Issues](https://github.com/cordlesssteve/styxy/issues) for current progress and roadmap.
+Styxy is fully operational and ready for production use. All core features have been implemented and tested, including CORE documentation integration and multi-instance coordination. See [Current Status](./CURRENT_STATUS.md) for detailed progress and [Issues](https://github.com/cordlesssteve/styxy/issues) for future enhancements.

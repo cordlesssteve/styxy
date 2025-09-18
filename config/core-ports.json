@@ -1,0 +1,162 @@
+{
+  "_meta": {
+    "description": "CORE Documentation Standard Port Configuration",
+    "source": "~/docs/CORE/PORT_REFERENCE_GUIDE.md v2.0",
+    "last_updated": "2025-01-17",
+    "compliance": "Universal Port Reference Guide"
+  },
+  "service_types": {
+    "dev": {
+      "description": "Frontend development servers (React, Next.js, Vite)",
+      "preferred_ports": [3000, 3001, 3002, 3003],
+      "port_range": [3000, 3099],
+      "multi_instance_pattern": "sequential",
+      "examples": ["React dev server", "Next.js", "Vite"]
+    },
+    "api": {
+      "description": "API servers and backend services",
+      "preferred_ports": [8000, 8001, 8002, 8003],
+      "port_range": [8000, 8099],
+      "multi_instance_pattern": "sequential",
+      "examples": ["Express API", "FastAPI", "Backend services"]
+    },
+    "database": {
+      "description": "Database services and Firestore emulators",
+      "preferred_ports": [8080, 8081, 8082, 8083],
+      "port_range": [8080, 8099],
+      "multi_instance_pattern": "sequential",
+      "examples": ["Firestore emulator", "Local databases"]
+    },
+    "auth": {
+      "description": "Authentication services and Firebase Auth",
+      "preferred_ports": [9099, 9100, 9101, 9102],
+      "port_range": [9099, 9199],
+      "multi_instance_pattern": "sequential",
+      "examples": ["Firebase Auth emulator", "Auth services"]
+    },
+    "functions": {
+      "description": "Firebase Functions and serverless",
+      "preferred_ports": [5001, 5002, 5003, 5004],
+      "port_range": [5000, 5099],
+      "multi_instance_pattern": "sequential",
+      "examples": ["Firebase Functions", "Serverless functions"]
+    },
+    "ui": {
+      "description": "Firebase UI and admin interfaces",
+      "preferred_ports": [4000, 4001, 4002, 4003],
+      "port_range": [4000, 4099],
+      "multi_instance_pattern": "sequential",
+      "examples": ["Firebase Emulator UI", "Admin panels"]
+    },
+    "hub": {
+      "description": "Emulator coordination hubs",
+      "preferred_ports": [4400, 4401, 4402, 4403],
+      "port_range": [4400, 4499],
+      "multi_instance_pattern": "sequential",
+      "examples": ["Multi-service coordination", "Emulator hubs"]
+    },
+    "storybook": {
+      "description": "Component development with Storybook",
+      "preferred_ports": [6006, 6007, 6008, 6009],
+      "port_range": [6006, 6029],
+      "multi_instance_pattern": "sequential",
+      "examples": ["Storybook dev servers", "Component showcase"]
+    },
+    "test": {
+      "description": "Browser debugging and testing tools",
+      "preferred_ports": [9200, 9201, 9202, 9203],
+      "port_range": [9200, 9299],
+      "multi_instance_pattern": "sequential",
+      "examples": ["Chrome DevTools", "Playwright", "Testing frameworks"]
+    },
+    "proxy": {
+      "description": "Development proxies and webpack dev server",
+      "preferred_ports": [8100, 8101, 8102, 8103],
+      "port_range": [8100, 8199],
+      "multi_instance_pattern": "sequential",
+      "examples": ["Webpack dev server", "Development proxies"]
+    },
+    "docs": {
+      "description": "Documentation servers",
+      "preferred_ports": [4100, 4101, 4102, 4103],
+      "port_range": [4100, 4199],
+      "multi_instance_pattern": "sequential",
+      "examples": ["Sphinx", "MkDocs", "Docusaurus"]
+    },
+    "monitoring": {
+      "description": "Development monitoring and metrics",
+      "preferred_ports": [3100, 3101, 3102, 3103],
+      "port_range": [3100, 3199],
+      "multi_instance_pattern": "sequential",
+      "examples": ["Metrics dashboards", "Logging interfaces"]
+    },
+    "build": {
+      "description": "Build system services",
+      "preferred_ports": [8200, 8201, 8202, 8203],
+      "port_range": [8200, 8299],
+      "multi_instance_pattern": "sequential",
+      "examples": ["Webpack", "Bundlers", "Build tools"]
+    }
+  },
+  "instance_templates": {
+    "main": {
+      "description": "Main development instance",
+      "port_offsets": {
+        "dev": 0,
+        "database": 0,
+        "auth": 0,
+        "functions": 0,
+        "ui": 0,
+        "hub": 0
+      }
+    },
+    "dev": {
+      "description": "Development branch instance",
+      "port_offsets": {
+        "dev": 1,
+        "database": 1,
+        "auth": 1,
+        "functions": 1,
+        "ui": 1,
+        "hub": 1
+      }
+    },
+    "staging": {
+      "description": "Staging environment instance",
+      "port_offsets": {
+        "dev": 2,
+        "database": 2,
+        "auth": 2,
+        "functions": 2,
+        "ui": 2,
+        "hub": 2
+      }
+    },
+    "features": {
+      "description": "Feature branch instance",
+      "port_offsets": {
+        "dev": 3,
+        "database": 3,
+        "auth": 3,
+        "functions": 3,
+        "ui": 3,
+        "hub": 3
+      }
+    }
+  },
+  "compliance": {
+    "version": "2.0",
+    "principles": {
+      "1:1_port_mapping": "Container and host ports must be identical",
+      "non_overlapping_ranges": "Each service category has dedicated ranges",
+      "multi_instance_support": "Support for 4+ concurrent instances per service type",
+      "sequential_allocation": "Ports allocated sequentially within ranges"
+    },
+    "validation": {
+      "enforce_ranges": true,
+      "require_sequential": true,
+      "max_instances_per_service": 4,
+      "conflict_detection": true
+    }
+  }
+}

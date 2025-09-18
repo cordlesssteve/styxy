@@ -10,6 +10,7 @@ const express = require('express');
 const fs = require('fs');
 const path = require('path');
 const { v4: uuidv4 } = require('uuid');
+const PortScanner = require('./utils/port-scanner');
 
 class StyxyDaemon {
   constructor(options = {}) {
@@ -22,6 +23,7 @@ class StyxyDaemon {
     this.allocations = new Map();
     this.instances = new Map();
     this.serviceTypes = this.loadServiceTypes();
+    this.portScanner = new PortScanner();
     
     // Express app setup
     this.app = express();
@@ -37,25 +39,56 @@ class StyxyDaemon {
    * Load service type configurations
    */
   loadServiceTypes() {
-    const defaultConfig = {
-      dev: { preferred_ports: [3000, 8000], range: [8000, 8099] },
-      api: { preferred_ports: [8000, 4000], range: [8000, 8099] },
-      test: { preferred_ports: [9000], range: [9000, 9099] },
-      storybook: { preferred_ports: [6006], range: [6006, 6010] },
-      docs: { preferred_ports: [4000], range: [4000, 4099] }
-    };
-    
+    // Try to load CORE port configuration first
+    const coreConfigFile = path.join(__dirname, '../config/core-ports.json');
+    const userConfigFile = path.join(this.configDir, 'config.json');
+
     try {
-      const configFile = path.join(this.configDir, 'config.json');
-      if (fs.existsSync(configFile)) {
-        const config = JSON.parse(fs.readFileSync(configFile, 'utf8'));
-        return config.service_types || defaultConfig;
+      // Load CORE configuration as base
+      let config = {};
+      if (fs.existsSync(coreConfigFile)) {
+        const coreConfig = JSON.parse(fs.readFileSync(coreConfigFile, 'utf8'));
+        config = this.transformCoreConfig(coreConfig.service_types);
+        console.log('✅ Loaded CORE port configuration from ~/docs/CORE/PORT_REFERENCE_GUIDE.md');
+      }
+
+      // Override with user configuration if exists
+      if (fs.existsSync(userConfigFile)) {
+        const userConfig = JSON.parse(fs.readFileSync(userConfigFile, 'utf8'));
+        config = { ...config, ...(userConfig.service_types || {}) };
+        console.log('✅ Applied user configuration overrides');
+      }
+
+      if (Object.keys(config).length > 0) {
+        return config;
       }
     } catch (error) {
-      console.warn('Failed to load config, using defaults:', error.message);
+      console.warn('Failed to load configuration:', error.message);
     }
-    
-    return defaultConfig;
+
+    // Fallback to minimal default
+    return {
+      dev: { preferred_ports: [3000], range: [3000, 3099] },
+      api: { preferred_ports: [8000], range: [8000, 8099] }
+    };
+  }
+
+  /**
+   * Transform CORE config format to daemon format
+   */
+  transformCoreConfig(coreServiceTypes) {
+    const transformed = {};
+
+    for (const [serviceType, config] of Object.entries(coreServiceTypes)) {
+      transformed[serviceType] = {
+        preferred_ports: config.preferred_ports,
+        range: config.port_range,
+        description: config.description,
+        examples: config.examples
+      };
+    }
+
+    return transformed;
   }
   
   /**
@@ -63,9 +96,9 @@ class StyxyDaemon {
    */
   setupRoutes() {
     // Port allocation endpoint
-    this.app.post('/allocate', (req, res) => {
+    this.app.post('/allocate', async (req, res) => {
       try {
-        const result = this.allocatePort(req.body);
+        const result = await this.allocatePort(req.body);
         res.json(result);
       } catch (error) {
         res.status(400).json({ success: false, error: error.message });
@@ -83,10 +116,24 @@ class StyxyDaemon {
     });
     
     // Port availability check
-    this.app.get('/check/:port', (req, res) => {
-      const port = parseInt(req.params.port);
-      const available = this.isPortAvailable(port);
-      res.json({ port, available, allocated_to: this.allocations.get(port) });
+    this.app.get('/check/:port', async (req, res) => {
+      try {
+        const port = parseInt(req.params.port);
+        const available = await this.isPortAvailable(port);
+        const portInfo = await this.portScanner.getPortInfo(port);
+
+        const allocation = this.allocations.get(port);
+        const isActuallyAvailable = available && !allocation;
+
+        res.json({
+          port,
+          available: isActuallyAvailable,
+          allocated_to: allocation || null,
+          system_usage: available ? null : portInfo
+        });
+      } catch (error) {
+        res.status(500).json({ success: false, error: error.message });
+      }
     });
     
     // Status endpoint
@@ -108,12 +155,117 @@ class StyxyDaemon {
       }));
       res.json({ allocations });
     });
+
+    // Configuration endpoint
+    this.app.get('/config', (req, res) => {
+      res.json({
+        service_types: this.serviceTypes,
+        compliance: {
+          source: 'CORE Documentation Standard',
+          version: '2.0'
+        }
+      });
+    });
+
+    // Instance management endpoints
+    this.app.get('/instance/list', (req, res) => {
+      const instances = Array.from(this.instances.entries()).map(([id, data]) => ({
+        instance_id: id,
+        ...data
+      }));
+      res.json({ instances });
+    });
+
+    this.app.post('/instance/register', (req, res) => {
+      const { instance_id, working_directory, metadata = {} } = req.body;
+
+      if (!instance_id) {
+        return res.status(400).json({ success: false, error: 'instance_id is required' });
+      }
+
+      const instanceData = {
+        working_directory,
+        registered_at: new Date().toISOString(),
+        last_heartbeat: new Date().toISOString(),
+        active_allocations: [],
+        metadata
+      };
+
+      this.instances.set(instance_id, instanceData);
+      this.saveState();
+
+      res.json({
+        success: true,
+        instance_id,
+        message: `Instance ${instance_id} registered`
+      });
+    });
+
+    this.app.put('/instance/:instanceId/heartbeat', (req, res) => {
+      const instanceId = req.params.instanceId;
+      const instance = this.instances.get(instanceId);
+
+      if (!instance) {
+        return res.status(404).json({ success: false, error: 'Instance not found' });
+      }
+
+      instance.last_heartbeat = new Date().toISOString();
+      this.instances.set(instanceId, instance);
+      this.saveState();
+
+      res.json({
+        success: true,
+        instance_id: instanceId,
+        last_heartbeat: instance.last_heartbeat
+      });
+    });
+
+    // Cleanup endpoint
+    this.app.post('/cleanup', (req, res) => {
+      try {
+        const result = this.performCleanup(req.body.force || false);
+        res.json(result);
+      } catch (error) {
+        res.status(500).json({ success: false, error: error.message });
+      }
+    });
+
+    // System port scan endpoint
+    this.app.get('/scan', async (req, res) => {
+      try {
+        const startPort = parseInt(req.query.start) || 3000;
+        const endPort = parseInt(req.query.end) || 9999;
+        const maxPorts = Math.min(endPort - startPort + 1, 100); // Limit scan size
+
+        const results = [];
+        for (let port = startPort; port < startPort + maxPorts; port++) {
+          const available = await this.isPortAvailable(port);
+          if (!available) {
+            const allocation = this.allocations.get(port);
+            const systemUsage = allocation ? null : await this.portScanner.getPortInfo(port);
+
+            results.push({
+              port,
+              allocated_to: allocation || null,
+              system_usage: systemUsage
+            });
+          }
+        }
+
+        res.json({
+          scan_range: `${startPort}-${Math.min(endPort, startPort + maxPorts - 1)}`,
+          ports_in_use: results
+        });
+      } catch (error) {
+        res.status(500).json({ success: false, error: error.message });
+      }
+    });
   }
   
   /**
    * Allocate a port for a service
    */
-  allocatePort({ service_type, service_name, preferred_port, instance_id, project_path }) {
+  async allocatePort({ service_type, service_name, preferred_port, instance_id, project_path }) {
     // Validate input
     if (!service_type) {
       throw new Error('service_type is required');
@@ -125,7 +277,7 @@ class StyxyDaemon {
     }
     
     // Try preferred port first
-    if (preferred_port && this.isPortAvailable(preferred_port)) {
+    if (preferred_port && await this.isPortAvailable(preferred_port)) {
       return this.createAllocation(preferred_port, {
         service_type,
         service_name,
@@ -136,7 +288,7 @@ class StyxyDaemon {
     
     // Try service preferred ports
     for (const port of serviceConfig.preferred_ports) {
-      if (this.isPortAvailable(port)) {
+      if (await this.isPortAvailable(port)) {
         return this.createAllocation(port, {
           service_type,
           service_name,
@@ -149,7 +301,7 @@ class StyxyDaemon {
     // Try service range
     const [start, end] = serviceConfig.range;
     for (let port = start; port <= end; port++) {
-      if (this.isPortAvailable(port)) {
+      if (await this.isPortAvailable(port)) {
         return this.createAllocation(port, {
           service_type,
           service_name,
@@ -208,14 +360,21 @@ class StyxyDaemon {
   /**
    * Check if a port is available
    */
-  isPortAvailable(port) {
+  async isPortAvailable(port) {
     // Check our allocations first
     if (this.allocations.has(port)) {
       return false;
     }
-    
-    // TODO: Add OS-level port checking (lsof, netstat)
-    return true;
+
+    // Check OS-level port usage
+    try {
+      const available = await this.portScanner.isPortAvailable(port);
+      return available;
+    } catch (error) {
+      console.warn(`Port availability check failed for ${port}:`, error.message);
+      // Fallback to assuming available if check fails
+      return true;
+    }
   }
   
   /**
@@ -318,6 +477,61 @@ class StyxyDaemon {
     if (this.allocations.size > 0) {
       console.log(`Cleanup: ${this.allocations.size} allocations active`);
     }
+  }
+
+  /**
+   * Perform cleanup of stale allocations (for API endpoint)
+   */
+  performCleanup(force = false) {
+    let cleaned = 0;
+    const staleAllocations = [];
+
+    // Find allocations from dead processes
+    for (const [port, allocation] of this.allocations) {
+      let isStale = false;
+
+      if (force) {
+        isStale = true;
+      } else {
+        // Check if process is still alive (basic check for now)
+        try {
+          // In a real implementation, we'd check if the process is actually using the port
+          // For now, we'll just clean up allocations older than 1 hour with no heartbeat
+          const allocatedAt = new Date(allocation.allocated_at);
+          const now = new Date();
+          const hoursSinceAllocation = (now - allocatedAt) / (1000 * 60 * 60);
+
+          if (hoursSinceAllocation > 1) {
+            isStale = true;
+          }
+        } catch (error) {
+          // If we can't check, consider it stale
+          isStale = true;
+        }
+      }
+
+      if (isStale) {
+        staleAllocations.push({ port, allocation });
+      }
+    }
+
+    // Remove stale allocations
+    for (const { port } of staleAllocations) {
+      this.allocations.delete(port);
+      cleaned++;
+    }
+
+    if (cleaned > 0) {
+      this.saveState();
+    }
+
+    return {
+      success: true,
+      cleaned,
+      message: force ?
+        `Force cleanup completed` :
+        `Cleaned up ${cleaned} stale allocations`
+    };
   }
   
   /**

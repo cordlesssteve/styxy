@@ -71,11 +71,27 @@ program
   .option('-f, --force', 'Force cleanup of all allocations')
   .action(cleanup);
 
+// Port scan
+program
+  .command('scan')
+  .description('Scan for ports in use (system and Styxy allocations)')
+  .option('-s, --start <port>', 'Start port number (default: 3000)', '3000')
+  .option('-e, --end <port>', 'End port number (default: 9999)', '9999')
+  .action(require('./commands/scan'));
+
 // Instance management
 program
   .command('instances')
   .description('List active Styxy instances')
   .action(require('./commands/instances'));
+
+// Configuration management
+program
+  .command('config')
+  .description('Manage Styxy configuration')
+  .argument('<action>', 'Action to perform (show|validate|generate|instances)')
+  .option('-f, --force', 'Force overwrite when generating config')
+  .action(require('./commands/config'));
 
 // Parse command line arguments
 program.parse();

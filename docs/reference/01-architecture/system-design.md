@@ -1,4 +1,8 @@
-# Styxy Design Document
+# Styxy System Design and Architecture
+**Status:** ARCHIVED
+**Created:** 2025-09-17
+**Last Updated:** 2025-09-17
+**Purpose:** Comprehensive design and architecture documentation for Styxy port coordination daemon
 
 This document contains the comprehensive design and architecture for Styxy, including the original analysis and planning from the development process.
 
@@ -16,7 +20,7 @@ This document contains the comprehensive design and architecture for Styxy, incl
 ### Core Challenges
 
 1. **Race Conditions**: Multiple instances allocating same port simultaneously
-2. **State Persistence**: Surviving process crashes and restarts  
+2. **State Persistence**: Surviving process crashes and restarts
 3. **Stale Lock Management**: Cleaning up dead process allocations
 4. **Service Intelligence**: Understanding service-specific port requirements
 5. **Conflict Resolution**: Handling unavailable preferred ports
@@ -43,7 +47,7 @@ Styxy fills a genuine gap in the 2025 development tooling ecosystem.
 - Process-to-port relationship tracking
 - Real-time availability verification
 
-**2. Allocation Layer** 
+**2. Allocation Layer**
 - Atomic port reservation using in-memory state
 - Service-type-aware port range management
 - Lock metadata with expiration
@@ -69,10 +73,10 @@ Instead of filesystem locks, a single background daemon (`styxy-daemon`) becomes
 
 ```
 styxy-daemon (Main Process)
-├── HTTP Server (localhost:9876) 
+├── HTTP Server (localhost:9876)
 ├── Process Monitor Thread
 ├── Port Registry (In-Memory)
-├── Cleanup Engine  
+├── Cleanup Engine
 ├── Configuration Manager
 └── State Persistence Layer
 ```
@@ -86,7 +90,7 @@ All state lives in fast memory structures:
   allocations: {
     "8000": {
       port: 8000,
-      service_type: "dev", 
+      service_type: "dev",
       service_name: "main-app",
       process_id: 12345,
       process_start_time: 1737142052,
@@ -98,7 +102,7 @@ All state lives in fast memory structures:
   },
   instances: {
     "claude_a": {
-      working_directory: "/home/user/project", 
+      working_directory: "/home/user/project",
       active_allocations: ["abc123", "def456"],
       last_heartbeat: "2025-01-17T17:10:00Z"
     }
@@ -153,7 +157,7 @@ setInterval(() => {
   },
   "storybook": {
     "preferred_ports": [6006],
-    "port_range": [6006, 6010], 
+    "port_range": [6006, 6010],
     "description": "Storybook instances"
   },
   "test": {
@@ -180,17 +184,17 @@ setInterval(() => {
 
 ```
 # Port Management
-POST   /allocate          # Request port allocation  
+POST   /allocate          # Request port allocation
 DELETE /allocate/{lockId} # Release specific allocation
 GET    /check/{port}      # Check port availability
 GET    /suggest/{serviceType} # Get suggested port
 
 # Instance Management
 POST   /instance/register # Register Claude instance
-POST   /instance/heartbeat # Update instance liveness  
+POST   /instance/heartbeat # Update instance liveness
 GET    /instance/list     # List active instances
 
-# Administrative  
+# Administrative
 GET    /status           # Daemon health check
 POST   /cleanup          # Force cleanup
 GET    /allocations      # List all allocations
@@ -222,7 +226,7 @@ styxy release <lock-id>                     # Release allocation
 ## Key Advantages
 
 ✅ **Eliminates ALL race conditions** - single process manages state
-✅ **Real-time cleanup** - ports available immediately 
+✅ **Real-time cleanup** - ports available immediately
 ✅ **No filesystem I/O** during normal operations (fast)
 ✅ **Atomic operations** - all allocations happen instantly
 ✅ **Cross-platform** - Node.js abstracts OS differences
@@ -231,7 +235,7 @@ styxy release <lock-id>                     # Release allocation
 ## Challenges & Solutions
 
 **Single Point of Failure** → State persistence + auto-restart + fallback mode
-**Management Complexity** → Auto-start + simple CLI tools  
+**Management Complexity** → Auto-start + simple CLI tools
 **Resource Usage** → Lightweight design (~10-20MB RAM)
 **Security** → localhost-only binding + input validation
 
