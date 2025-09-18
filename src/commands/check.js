@@ -2,11 +2,18 @@
  * Port availability check command
  */
 
-async function check(port) {
+const { daemonRequest } = require('../utils/daemon-client');
+
+async function check(port, options = {}) {
   try {
-    const response = await fetch(`http://127.0.0.1:9876/check/${port}`);
+    const response = await daemonRequest(`/check/${port}`);
     const result = await response.json();
-    
+
+    if (options.json) {
+      console.log(JSON.stringify(result));
+      return;
+    }
+
     if (result.available) {
       console.log(`✅ Port ${port} is available`);
     } else {
@@ -40,8 +47,8 @@ async function check(port) {
       }
     }
   } catch (error) {
-    if (error.code === 'ECONNREFUSED') {
-      console.error('❌ Styxy daemon is not running. Start it with: styxy daemon start');
+    if (options.json) {
+      console.log(JSON.stringify({ success: false, error: error.message }));
     } else {
       console.error(`❌ Error: ${error.message}`);
     }

@@ -41,6 +41,7 @@ program
   .option('-p, --port <port>', 'Preferred port number')
   .option('-n, --name <name>', 'Service instance name')
   .option('--project <path>', 'Project path context')
+  .option('--json', 'Output result as JSON')
   .action(allocate);
 
 // Port availability check
@@ -48,6 +49,7 @@ program
   .command('check')
   .description('Check if a port is available')
   .argument('<port>', 'Port number to check')
+  .option('--json', 'Output result as JSON')
   .action(check);
 
 // List allocations
@@ -55,6 +57,7 @@ program
   .command('list')
   .description('List all current port allocations')
   .option('-v, --verbose', 'Show detailed information')
+  .option('--json', 'Output result as JSON')
   .action(list);
 
 // Release allocation

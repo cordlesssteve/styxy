@@ -11,6 +11,11 @@
     "start": "node src/index.js",
     "dev": "node --watch src/index.js",
     "test": "jest",
+    "test:unit": "jest --selectProjects unit",
+    "test:integration": "jest --selectProjects integration",
+    "test:e2e": "jest --selectProjects e2e",
+    "test:watch": "jest --watch",
+    "test:coverage": "jest --coverage",
     "lint": "eslint src/",
     "daemon:start": "node src/daemon.js --daemon",
     "daemon:stop": "node bin/styxy daemon stop",
@@ -35,9 +40,13 @@
     "uuid": "^9.0.0"
   },
   "devDependencies": {
+    "@types/jest": "^30.0.0",
+    "cross-spawn": "^7.0.6",
     "eslint": "^8.0.0",
     "jest": "^29.0.0",
-    "nodemon": "^3.0.0"
+    "nodemon": "^3.0.0",
+    "supertest": "^7.1.4",
+    "tmp": "^0.2.5"
   },
   "repository": {
     "type": "git",

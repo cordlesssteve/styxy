@@ -405,7 +405,15 @@ class StyxyDaemon {
     try {
       if (fs.existsSync(this.stateFile)) {
         const state = JSON.parse(fs.readFileSync(this.stateFile, 'utf8'));
-        this.allocations = new Map(Object.entries(state.allocations || {}));
+
+        // Convert port strings back to numbers for allocations
+        this.allocations = new Map();
+        if (state.allocations) {
+          for (const [portStr, allocation] of Object.entries(state.allocations)) {
+            this.allocations.set(parseInt(portStr), allocation);
+          }
+        }
+
         this.instances = new Map(Object.entries(state.instances || {}));
         console.log(`Restored ${this.allocations.size} allocations from previous session`);
       }

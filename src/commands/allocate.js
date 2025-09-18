@@ -2,9 +2,11 @@
  * Port allocation command
  */
 
+const { daemonRequest } = require('../utils/daemon-client');
+
 async function allocate(options) {
   try {
-    const response = await fetch('http://127.0.0.1:9876/allocate', {
+    const response = await daemonRequest('/allocate', {
       method: 'POST',
       headers: {
         'Content-Type': 'application/json'
@@ -17,9 +19,14 @@ async function allocate(options) {
         project_path: options.project || process.cwd()
       })
     });
-    
+
     const result = await response.json();
-    
+
+    if (options.json) {
+      console.log(JSON.stringify(result));
+      return;
+    }
+
     if (result.success) {
       console.log(`✅ ${result.message}`);
       console.log(`Lock ID: ${result.lock_id}`);
@@ -29,8 +36,8 @@ async function allocate(options) {
       process.exit(1);
     }
   } catch (error) {
-    if (error.code === 'ECONNREFUSED') {
-      console.error('❌ Styxy daemon is not running. Start it with: styxy daemon start');
+    if (options.json) {
+      console.log(JSON.stringify({ success: false, error: error.message }));
     } else {
       console.error(`❌ Error: ${error.message}`);
     }
