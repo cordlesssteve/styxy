@@ -15,6 +15,10 @@ const PortScanner = require('./utils/port-scanner');
 const Validator = require('./utils/validator');
 const AuthMiddleware = require('./middleware/auth');
 const RateLimiter = require('./middleware/rate-limiter');
+const Logger = require('./utils/logger');
+const StateManager = require('./utils/state-manager');
+const CircuitBreaker = require('./utils/circuit-breaker');
+const Metrics = require('./utils/metrics');
 
 class StyxyDaemon {
   constructor(options = {}) {
@@ -22,13 +26,28 @@ class StyxyDaemon {
     this.configDir = options.configDir || path.join(process.env.HOME, '.styxy');
     this.stateFile = path.join(this.configDir, 'daemon.state');
     this.pidFile = path.join(this.configDir, 'daemon.pid');
-    
+
+    // Enhanced components
+    this.logger = new Logger({ component: 'daemon', logDir: path.join(this.configDir, 'logs') });
+    this.stateManager = new StateManager({
+      stateFile: this.stateFile,
+      backupDir: path.join(this.configDir, 'backups')
+    });
+    this.metrics = new Metrics();
+
+    // Circuit breakers for external operations
+    this.portScannerBreaker = new CircuitBreaker({
+      name: 'port-scanner',
+      failureThreshold: 3,
+      recoveryTimeout: 15000
+    });
+
     // In-memory state
     this.allocations = new Map();
     this.instances = new Map();
     this.serviceTypes = this.loadServiceTypes();
     this.portScanner = new PortScanner();
-    
+
     // Express app setup
     this.app = express();
     this.app.use(express.json({ limit: '10kb' })); // Limit JSON payload size
@@ -38,17 +57,19 @@ class StyxyDaemon {
     this.rateLimiter = new RateLimiter({
       windowMs: 60000, // 1 minute
       maxRequests: 100, // 100 requests per minute
-      skipPaths: ['/status'] // Don't rate limit health checks
+      skipPaths: ['/status', '/health', '/metrics'] // Don't rate limit monitoring endpoints
     });
 
     this.app.use(this.rateLimiter.limit());
     this.app.use(this.auth.authenticate());
 
     this.setupRoutes();
-    
-    // Process monitoring
+
+    // Process monitoring and shutdown handling
     this.cleanupInterval = null;
     this.isShuttingDown = false;
+    this.server = null;
+    this.setupGracefulShutdown();
   }
   
   /**
@@ -65,21 +86,21 @@ class StyxyDaemon {
       if (fs.existsSync(coreConfigFile)) {
         const coreConfig = JSON.parse(fs.readFileSync(coreConfigFile, 'utf8'));
         config = this.transformCoreConfig(coreConfig.service_types);
-        console.log('✅ Loaded CORE port configuration from ~/docs/CORE/PORT_REFERENCE_GUIDE.md');
+        this.logger.info('Loaded CORE port configuration from ~/docs/CORE/PORT_REFERENCE_GUIDE.md');
       }
 
       // Override with user configuration if exists
       if (fs.existsSync(userConfigFile)) {
         const userConfig = JSON.parse(fs.readFileSync(userConfigFile, 'utf8'));
         config = { ...config, ...(userConfig.service_types || {}) };
-        console.log('✅ Applied user configuration overrides');
+        this.logger.info('Applied user configuration overrides');
       }
 
       if (Object.keys(config).length > 0) {
         return config;
       }
     } catch (error) {
-      console.warn('Failed to load configuration:', error.message);
+      this.logger.warn('Failed to load configuration', { error: error.message });
     }
 
     // Fallback to minimal default
@@ -113,14 +134,25 @@ class StyxyDaemon {
   setupRoutes() {
     // Port allocation endpoint
     this.app.post('/allocate', async (req, res) => {
+      const endTimer = this.metrics.startTimer('allocation_request_duration');
+
       try {
         // Validate JSON payload size
         const bodyStr = JSON.stringify(req.body);
         Validator.validateJsonSize(bodyStr);
 
-        const result = await this.allocatePort(req.body);
+        // Add request context for audit logging
+        const requestContext = {
+          userAgent: req.get('User-Agent'),
+          remoteIP: req.ip || req.connection?.remoteAddress
+        };
+
+        const result = await this.allocatePort({ ...req.body, ...requestContext });
+        endTimer();
         res.json(result);
       } catch (error) {
+        endTimer();
+        this.metrics.incrementCounter('allocation_errors_total');
         res.status(400).json({
           success: false,
           error: Validator.sanitizeForLogging(error.message)
@@ -290,12 +322,155 @@ class StyxyDaemon {
         res.status(500).json({ success: false, error: error.message });
       }
     });
+
+    // Comprehensive health check endpoint
+    this.app.get('/health', async (req, res) => {
+      try {
+        const endTimer = this.metrics.startTimer('health_check_duration');
+
+        const health = {
+          status: 'healthy',
+          timestamp: new Date().toISOString(),
+          uptime: process.uptime(),
+          version: require('../../package.json').version,
+
+          // System metrics
+          system: {
+            memory: process.memoryUsage(),
+            cpu: process.cpuUsage(),
+            pid: process.pid,
+            platform: process.platform,
+            node_version: process.version
+          },
+
+          // Service health
+          services: {
+            daemon: {
+              status: 'healthy',
+              allocations: this.allocations.size,
+              instances: this.instances.size,
+              last_cleanup: this.lastCleanup || null
+            },
+
+            state_manager: {
+              status: 'healthy',
+              recovery_status: this.stateManager.getRecoveryStatus()
+            },
+
+            port_scanner: {
+              status: 'healthy',
+              circuit_breaker: this.portScannerBreaker.getStats()
+            }
+          },
+
+          // Configuration status
+          config: {
+            service_types_loaded: Object.keys(this.serviceTypes).length,
+            log_level: this.logger.level,
+            auth_enabled: !!this.auth
+          }
+        };
+
+        // Check for any warning conditions
+        const warnings = [];
+
+        if (this.allocations.size > 100) {
+          warnings.push('High number of allocations detected');
+        }
+
+        if (process.memoryUsage().heapUsed > 100 * 1024 * 1024) { // 100MB
+          warnings.push('High memory usage detected');
+        }
+
+        if (this.portScannerBreaker.getStats().state !== 'CLOSED') {
+          warnings.push('Port scanner circuit breaker is open');
+          health.status = 'degraded';
+        }
+
+        if (warnings.length > 0) {
+          health.warnings = warnings;
+          if (health.status === 'healthy') {
+            health.status = 'warning';
+          }
+        }
+
+        const duration = endTimer();
+        health.response_time_ms = duration;
+
+        this.metrics.incrementCounter('health_checks_total', 1, { status: health.status });
+
+        const statusCode = health.status === 'healthy' ? 200 :
+                          health.status === 'warning' ? 200 : 503;
+
+        res.status(statusCode).json(health);
+
+      } catch (error) {
+        this.logger.error('Health check failed', { error: error.message });
+        this.metrics.incrementCounter('health_check_errors_total');
+
+        res.status(503).json({
+          status: 'unhealthy',
+          timestamp: new Date().toISOString(),
+          error: 'Health check failed'
+        });
+      }
+    });
+
+    // Metrics endpoint
+    this.app.get('/metrics', (req, res) => {
+      try {
+        const format = req.query.format || 'json';
+
+        if (format === 'prometheus') {
+          res.set('Content-Type', 'text/plain; version=0.0.4; charset=utf-8');
+          res.send(this.metrics.exportPrometheus());
+        } else {
+          res.json(this.metrics.getMetrics());
+        }
+      } catch (error) {
+        this.logger.error('Metrics endpoint failed', { error: error.message });
+        res.status(500).json({ error: 'Failed to retrieve metrics' });
+      }
+    });
+
+    // Audit log endpoint
+    this.app.get('/audit', (req, res) => {
+      try {
+        // This would typically read from audit log files
+        // For now, return basic audit information
+        const auditInfo = {
+          enabled: true,
+          log_location: path.join(this.logger.logDir, 'audit.log'),
+          retention_days: 30,
+          recent_events: [] // Would load recent events from log
+        };
+
+        res.json(auditInfo);
+      } catch (error) {
+        this.logger.error('Audit endpoint failed', { error: error.message });
+        res.status(500).json({ error: 'Failed to retrieve audit information' });
+      }
+    });
+
+    // Circuit breaker status endpoint
+    this.app.get('/circuit-breakers', (req, res) => {
+      try {
+        const breakers = {
+          port_scanner: this.portScannerBreaker.getStats()
+        };
+
+        res.json({ circuit_breakers: breakers });
+      } catch (error) {
+        this.logger.error('Circuit breakers endpoint failed', { error: error.message });
+        res.status(500).json({ error: 'Failed to retrieve circuit breaker status' });
+      }
+    });
   }
   
   /**
    * Allocate a port for a service
    */
-  async allocatePort({ service_type, service_name, preferred_port, instance_id, project_path }) {
+  async allocatePort({ service_type, service_name, preferred_port, instance_id, project_path, userAgent, remoteIP }) {
     // Validate all inputs
     const validServiceType = Validator.validateServiceType(service_type, this.serviceTypes);
     const validServiceName = service_name ? Validator.validateServiceName(service_name) : 'unnamed-service';
@@ -309,6 +484,8 @@ class StyxyDaemon {
 
     const serviceConfig = this.serviceTypes[validServiceType];
     
+    const requestContext = { userAgent, remoteIP };
+
     // Try preferred port first
     if (validPreferredPort && await this.isPortAvailable(validPreferredPort)) {
       return this.createAllocation(validPreferredPort, {
@@ -316,9 +493,9 @@ class StyxyDaemon {
         service_name: validServiceName,
         instance_id: validInstanceId,
         project_path: validProjectPath
-      });
+      }, requestContext);
     }
-    
+
     // Try service preferred ports
     for (const port of serviceConfig.preferred_ports) {
       if (await this.isPortAvailable(port)) {
@@ -327,10 +504,10 @@ class StyxyDaemon {
           service_name,
           instance_id,
           project_path
-        });
+        }, requestContext);
       }
     }
-    
+
     // Try service range
     const [start, end] = serviceConfig.range;
     for (let port = start; port <= end; port++) {
@@ -340,7 +517,7 @@ class StyxyDaemon {
           service_name,
           instance_id,
           project_path
-        });
+        }, requestContext);
       }
     }
     
@@ -350,18 +527,36 @@ class StyxyDaemon {
   /**
    * Create a port allocation
    */
-  async createAllocation(port, metadata) {
+  async createAllocation(port, metadata, requestContext = {}) {
     const lockId = uuidv4();
     const allocation = {
       ...metadata,
       port,
       lock_id: lockId,
       process_id: process.pid,
-      allocated_at: new Date().toISOString()
+      allocated_at: new Date().toISOString(),
+      userAgent: requestContext.userAgent || 'unknown',
+      remoteIP: requestContext.remoteIP || 'unknown'
     };
 
     this.allocations.set(port, allocation);
     await this.saveState();
+
+    // Audit logging
+    this.logger.audit('PORT_ALLOCATED', {
+      port,
+      lockId,
+      serviceType: metadata.service_type,
+      serviceName: metadata.service_name,
+      instanceId: metadata.instance_id,
+      projectPath: metadata.project_path,
+      userAgent: allocation.userAgent || 'unknown',
+      remoteIP: allocation.remoteIP || 'unknown'
+    });
+
+    this.metrics.incrementCounter('ports_allocated_total', 1, {
+      service_type: metadata.service_type
+    });
 
     return {
       success: true,
@@ -379,6 +574,20 @@ class StyxyDaemon {
       if (allocation.lock_id === lockId) {
         this.allocations.delete(port);
         await this.saveState();
+
+        // Audit logging
+        this.logger.audit('PORT_RELEASED', {
+          port,
+          lockId,
+          serviceType: allocation.service_type,
+          serviceName: allocation.service_name,
+          releasedAfterMs: Date.now() - new Date(allocation.allocated_at).getTime()
+        });
+
+        this.metrics.incrementCounter('ports_released_total', 1, {
+          service_type: allocation.service_type
+        });
+
         return {
           success: true,
           port,
@@ -386,7 +595,7 @@ class StyxyDaemon {
         };
       }
     }
-    
+
     throw new Error(`Lock ID ${lockId} not found`);
   }
   
@@ -399,26 +608,54 @@ class StyxyDaemon {
       return false;
     }
 
-    // Check OS-level port usage
+    // Check OS-level port usage with circuit breaker and timeout
     try {
-      const available = await this.portScanner.isPortAvailable(port);
+      const endTimer = this.metrics.startTimer('port_availability_check_duration');
+
+      const available = await this.portScannerBreaker.execute(async () => {
+        const timeoutPromise = new Promise((_, reject) => {
+          setTimeout(() => reject(new Error('Port check timeout')), 5000); // 5 second timeout
+        });
+
+        const checkPromise = this.portScanner.isPortAvailable(port);
+
+        return Promise.race([checkPromise, timeoutPromise]);
+      });
+
+      endTimer();
+      this.metrics.incrementCounter('port_checks_total', 1, { result: available ? 'available' : 'unavailable' });
+
       return available;
+
     } catch (error) {
-      console.warn(`Port availability check failed for ${port}:`, error.message);
+      this.logger.warn('Port availability check failed', {
+        port,
+        error: error.message,
+        circuitBreakerOpen: error.circuitBreakerOpen || false
+      });
+
+      this.metrics.incrementCounter('port_check_errors_total');
+
       // Fallback to assuming available if check fails
       return true;
     }
   }
   
   /**
-   * Save current state to disk with file locking
+   * Save current state with enhanced integrity protection
    */
   async saveState() {
     try {
       const state = {
         saved_at: new Date().toISOString(),
-        allocations: Object.fromEntries(this.allocations),
-        instances: Object.fromEntries(this.instances)
+        allocations: Array.from(this.allocations.entries()).map(([port, allocation]) => ({
+          ...allocation,
+          port
+        })),
+        instances: Array.from(this.instances.entries()).map(([id, instance]) => ({
+          ...instance,
+          id
+        }))
       };
 
       // Ensure directory exists with secure permissions
@@ -426,27 +663,13 @@ class StyxyDaemon {
         fs.mkdirSync(this.configDir, { recursive: true, mode: 0o700 });
       }
 
-      // Skip file locking in test environment to avoid race conditions
-      if (process.env.NODE_ENV === 'test') {
-        fs.writeFileSync(this.stateFile, JSON.stringify(state, null, 2), { mode: 0o600 });
-        return;
-      }
+      await this.stateManager.saveState(state);
+      this.metrics.incrementCounter('state_saves_total');
 
-      // Use file locking in production
-      let release;
-      try {
-        release = await lockfile.lock(this.stateFile, {
-          stale: 10000, // 10 seconds
-          update: 1000  // Check every second
-        });
-        fs.writeFileSync(this.stateFile, JSON.stringify(state, null, 2), { mode: 0o600 });
-      } finally {
-        if (release) {
-          await release();
-        }
-      }
     } catch (error) {
-      console.error('Failed to save state:', error.message);
+      this.logger.error('Failed to save state', { error: error.message });
+      this.metrics.incrementCounter('state_save_errors_total');
+      throw error;
     }
   }
   
@@ -455,51 +678,66 @@ class StyxyDaemon {
    */
   async loadState() {
     try {
-      if (fs.existsSync(this.stateFile)) {
-        let stateData;
+      const state = await this.stateManager.loadState();
 
-        // Skip file locking in test environment
-        if (process.env.NODE_ENV === 'test') {
-          stateData = fs.readFileSync(this.stateFile, 'utf8');
-        } else {
-          // Use file locking in production
-          const release = await lockfile.lock(this.stateFile, {
-            stale: 10000, // 10 seconds
-            update: 1000  // Check every second
-          });
+      this.allocations = new Map();
+      this.instances = new Map();
 
+      // Load allocations
+      if (state.allocations) {
+        for (const allocation of state.allocations) {
           try {
-            stateData = fs.readFileSync(this.stateFile, 'utf8');
-          } finally {
-            await release();
+            const port = Validator.validatePort(allocation.port);
+            const validAllocation = {
+              ...allocation,
+              port,
+              lockId: Validator.validateLockId(allocation.lockId),
+              serviceType: Validator.validateServiceType(allocation.serviceType)
+            };
+            this.allocations.set(port, validAllocation);
+          } catch (error) {
+            this.logger.warn('Skipping invalid allocation during load', {
+              allocation: Validator.sanitizeObject(allocation),
+              error: error.message
+            });
           }
         }
-
-        Validator.validateJsonSize(stateData, 1024 * 1024); // 1MB max
-        const state = JSON.parse(stateData);
-
-        // Convert port strings back to numbers for allocations
-        this.allocations = new Map();
-        if (state.allocations) {
-          for (const [portStr, allocation] of Object.entries(state.allocations)) {
-            const port = Validator.validatePort(portStr);
-            this.allocations.set(port, allocation);
-          }
-        }
-
-        this.instances = new Map();
-        if (state.instances) {
-          for (const [instanceId, instance] of Object.entries(state.instances)) {
-            const validInstanceId = Validator.validateInstanceId(instanceId);
-            this.instances.set(validInstanceId, instance);
-          }
-        }
-
-        console.log(`Restored ${this.allocations.size} allocations from previous session`);
       }
+
+      // Load instances
+      if (state.instances) {
+        for (const instance of state.instances) {
+          try {
+            const instanceId = Validator.validateInstanceId(instance.id);
+            const validInstance = {
+              ...instance,
+              id: instanceId,
+              lastHeartbeat: new Date(instance.lastHeartbeat)
+            };
+            this.instances.set(instanceId, validInstance);
+          } catch (error) {
+            this.logger.warn('Skipping invalid instance during load', {
+              instance: Validator.sanitizeObject(instance),
+              error: error.message
+            });
+          }
+        }
+      }
+
+      this.logger.info('State loaded successfully', {
+        allocations: this.allocations.size,
+        instances: this.instances.size
+      });
+
+      this.metrics.incrementCounter('state_loads_total');
+
     } catch (error) {
-      console.error('Failed to load state:', error.message);
-      console.log('Starting with clean state');
+      this.logger.error('Failed to load state', { error: error.message });
+      this.metrics.incrementCounter('state_load_errors_total');
+
+      // Initialize empty state on error
+      this.allocations = new Map();
+      this.instances = new Map();
     }
   }
   
@@ -507,31 +745,71 @@ class StyxyDaemon {
    * Start the daemon
    */
   async start() {
-    // Load previous state
-    await this.loadState();
-    
-    // Start HTTP server
-    return new Promise((resolve, reject) => {
-      this.server = this.app.listen(this.port, '127.0.0.1', (error) => {
-        if (error) {
-          reject(error);
-          return;
-        }
-        
-        console.log(`Styxy daemon started on http://127.0.0.1:${this.port}`);
-        
-        // Write PID file
-        this.writePidFile();
-        
-        // Start cleanup interval
-        this.startCleanupTimer();
-        
-        // Setup graceful shutdown
-        this.setupShutdownHandlers();
-        
-        resolve();
+    try {
+      // Audit logging
+      this.logger.audit('DAEMON_STARTING', {
+        port: this.port,
+        pid: process.pid,
+        nodeVersion: process.version,
+        platform: process.platform
       });
-    });
+
+      // Load previous state with recovery
+      await this.loadState();
+
+      // Start HTTP server with timeout
+      const serverStartTimeout = 30000; // 30 seconds
+      const serverPromise = new Promise((resolve, reject) => {
+        this.server = this.app.listen(this.port, '127.0.0.1', (error) => {
+          if (error) {
+            this.logger.error('Failed to start HTTP server', { error: error.message });
+            reject(error);
+            return;
+          }
+
+          this.logger.info(`Styxy daemon started successfully`, {
+            port: this.port,
+            pid: process.pid,
+            uptime: process.uptime()
+          });
+
+          resolve();
+        });
+      });
+
+      const timeoutPromise = new Promise((_, reject) => {
+        setTimeout(() => {
+          reject(new Error(`Server startup timeout after ${serverStartTimeout}ms`));
+        }, serverStartTimeout);
+      });
+
+      await Promise.race([serverPromise, timeoutPromise]);
+
+      // Write PID file
+      this.writePidFile();
+
+      // Start cleanup interval
+      this.startCleanupTimer();
+
+      // Audit successful start
+      this.logger.audit('DAEMON_STARTED', {
+        port: this.port,
+        allocationsRestored: this.allocations.size,
+        instancesRestored: this.instances.size
+      });
+
+      this.metrics.incrementCounter('daemon_starts_total');
+
+    } catch (error) {
+      this.logger.error('Daemon startup failed', { error: error.message });
+      this.logger.audit('DAEMON_START_FAILED', {
+        error: error.message,
+        port: this.port
+      });
+
+      this.metrics.incrementCounter('daemon_start_errors_total');
+      throw error;
+    }
   }
   
   /**
@@ -684,23 +962,97 @@ class StyxyDaemon {
   /**
    * Setup graceful shutdown handlers
    */
-  setupShutdownHandlers() {
-    const shutdown = async (signal) => {
-      console.log(`\nReceived ${signal}, shutting down gracefully...`);
+  setupGracefulShutdown() {
+    const gracefulShutdown = async (signal) => {
+      if (this.isShuttingDown) {
+        this.logger.warn('Shutdown already in progress, forcing exit');
+        process.exit(1);
+      }
+
+      this.isShuttingDown = true;
+      this.logger.info(`Received ${signal}, initiating graceful shutdown`);
+
+      // Set shutdown timeout
+      const shutdownTimeout = setTimeout(() => {
+        this.logger.error('Shutdown timeout exceeded, forcing exit');
+        process.exit(1);
+      }, 30000); // 30 seconds
 
       try {
-        await this.stop();
+        // 1. Stop accepting new connections
+        if (this.server) {
+          this.server.close(() => {
+            this.logger.info('HTTP server closed');
+          });
+        }
+
+        // 2. Clear intervals and cleanup resources
+        if (this.cleanupInterval) {
+          clearInterval(this.cleanupInterval);
+          this.logger.debug('Cleanup interval cleared');
+        }
+
+        // 3. Save current state
+        await this.saveState();
+        this.logger.info('State saved before shutdown');
+
+        // 4. Cleanup circuit breakers
+        if (this.portScannerBreaker) {
+          this.portScannerBreaker.destroy();
+        }
+
+        // 5. Cleanup metrics
+        if (this.metrics) {
+          this.metrics.destroy();
+        }
+
+        // 6. Cleanup auth middleware
+        if (this.auth && this.auth.destroy) {
+          this.auth.destroy();
+        }
+
+        // 7. Remove PID file
+        try {
+          if (fs.existsSync(this.pidFile)) {
+            fs.unlinkSync(this.pidFile);
+            this.logger.debug('PID file removed');
+          }
+        } catch (error) {
+          this.logger.warn('Failed to remove PID file', { error: error.message });
+        }
+
+        clearTimeout(shutdownTimeout);
+        this.logger.info('Graceful shutdown completed');
         process.exit(0);
+
       } catch (error) {
-        console.error('Shutdown failed:', error.message);
+        clearTimeout(shutdownTimeout);
+        this.logger.error('Shutdown failed', { error: error.message });
         process.exit(1);
       }
     };
 
-    // Avoid adding duplicate listeners in test environment
+    // Setup signal handlers - avoid duplicates in test environment
     if (!process.env.NODE_ENV || process.env.NODE_ENV !== 'test') {
-      process.on('SIGTERM', () => shutdown('SIGTERM'));
-      process.on('SIGINT', () => shutdown('SIGINT'));
+      process.on('SIGTERM', () => gracefulShutdown('SIGTERM'));
+      process.on('SIGINT', () => gracefulShutdown('SIGINT'));
+
+      // Handle uncaught exceptions and unhandled rejections
+      process.on('uncaughtException', (error) => {
+        this.logger.error('Uncaught exception', {
+          error: error.message,
+          stack: error.stack
+        });
+        gracefulShutdown('UNCAUGHT_EXCEPTION');
+      });
+
+      process.on('unhandledRejection', (reason, promise) => {
+        this.logger.error('Unhandled rejection', {
+          reason: String(reason),
+          promise: String(promise)
+        });
+        gracefulShutdown('UNHANDLED_REJECTION');
+      });
     }
   }
 }

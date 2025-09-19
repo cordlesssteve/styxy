@@ -1,9 +1,12 @@
 /**
- * Input Validation Utilities
+ * Enhanced Input Validation and Sanitization Utilities
  *
- * Provides centralized validation functions to prevent injection attacks
- * and ensure data integrity across the Styxy daemon.
+ * Provides comprehensive validation functions to prevent injection attacks,
+ * ensure data integrity, and protect against various security vulnerabilities.
  */
+
+const path = require('path');
+const fs = require('fs');
 
 class Validator {
   /**
@@ -167,6 +170,212 @@ class Validator {
     }
 
     return { start: startPort, end: endPort };
+  }
+
+  /**
+   * Validate and sanitize file paths to prevent directory traversal
+   */
+  static validateFilePath(filePath, allowedDirectories = []) {
+    if (!filePath || typeof filePath !== 'string') {
+      throw new Error('File path must be a non-empty string');
+    }
+
+    // Check for null bytes
+    if (filePath.includes('\0')) {
+      throw new Error('File path cannot contain null bytes');
+    }
+
+    // Normalize the path to resolve any . or .. components
+    const normalizedPath = path.normalize(filePath);
+
+    // Check for directory traversal attempts
+    if (normalizedPath.includes('..')) {
+      throw new Error('Directory traversal not allowed');
+    }
+
+    // Check against allowed directories if specified
+    if (allowedDirectories.length > 0) {
+      const isAllowed = allowedDirectories.some(allowedDir => {
+        const normalizedAllowed = path.normalize(allowedDir);
+        return normalizedPath.startsWith(normalizedAllowed);
+      });
+
+      if (!isAllowed) {
+        throw new Error(`Path not allowed. Must be within: ${allowedDirectories.join(', ')}`);
+      }
+    }
+
+    return normalizedPath;
+  }
+
+  /**
+   * Validate API key format
+   */
+  static validateApiKey(apiKey) {
+    if (!apiKey || typeof apiKey !== 'string') {
+      throw new Error('API key must be a non-empty string');
+    }
+
+    // Check for reasonable length (64 chars for SHA-256 hex)
+    if (apiKey.length < 32 || apiKey.length > 128) {
+      throw new Error('API key must be between 32 and 128 characters');
+    }
+
+    // Check for valid characters (hex or base64)
+    if (!/^[a-fA-F0-9]+$/.test(apiKey) && !/^[A-Za-z0-9+/=]+$/.test(apiKey)) {
+      throw new Error('API key contains invalid characters');
+    }
+
+    return apiKey;
+  }
+
+  /**
+   * Validate HTTP headers to prevent header injection
+   */
+  static validateHttpHeader(name, value) {
+    if (!name || typeof name !== 'string') {
+      throw new Error('Header name must be a non-empty string');
+    }
+
+    if (!value || typeof value !== 'string') {
+      throw new Error('Header value must be a non-empty string');
+    }
+
+    // Check for CRLF injection
+    if (name.includes('\r') || name.includes('\n') || value.includes('\r') || value.includes('\n')) {
+      throw new Error('Headers cannot contain CRLF characters');
+    }
+
+    // Validate header name format
+    if (!/^[a-zA-Z0-9-_]+$/.test(name)) {
+      throw new Error('Header name contains invalid characters');
+    }
+
+    return { name, value };
+  }
+
+  /**
+   * Validate command-line arguments to prevent injection
+   */
+  static validateCommandArg(arg) {
+    if (typeof arg !== 'string') {
+      throw new Error('Command argument must be a string');
+    }
+
+    // Check for dangerous characters that could be used for injection
+    const dangerousChars = /[;&|`$(){}[\]<>'"\\]/;
+    if (dangerousChars.test(arg)) {
+      throw new Error('Command argument contains potentially dangerous characters');
+    }
+
+    return arg;
+  }
+
+  /**
+   * Validate timeout values
+   */
+  static validateTimeout(timeout, minMs = 100, maxMs = 300000) {
+    const timeoutNum = parseInt(timeout, 10);
+    if (isNaN(timeoutNum)) {
+      throw new Error(`Timeout must be a number, got: ${timeout}`);
+    }
+
+    if (timeoutNum < minMs || timeoutNum > maxMs) {
+      throw new Error(`Timeout must be between ${minMs}ms and ${maxMs}ms, got: ${timeoutNum}ms`);
+    }
+
+    return timeoutNum;
+  }
+
+  /**
+   * Validate environment variable names
+   */
+  static validateEnvVarName(name) {
+    if (!name || typeof name !== 'string') {
+      throw new Error('Environment variable name must be a non-empty string');
+    }
+
+    // Standard env var naming convention
+    if (!/^[A-Z_][A-Z0-9_]*$/.test(name)) {
+      throw new Error('Environment variable name must contain only uppercase letters, numbers, and underscores');
+    }
+
+    if (name.length > 100) {
+      throw new Error('Environment variable name too long');
+    }
+
+    return name;
+  }
+
+  /**
+   * Validate PID (Process ID)
+   */
+  static validatePid(pid) {
+    const pidNum = parseInt(pid, 10);
+    if (isNaN(pidNum)) {
+      throw new Error(`PID must be a number, got: ${pid}`);
+    }
+
+    if (pidNum <= 0 || pidNum > 4194304) { // Linux max PID
+      throw new Error(`PID must be between 1 and 4194304, got: ${pidNum}`);
+    }
+
+    return pidNum;
+  }
+
+  /**
+   * Sanitize object for safe serialization
+   */
+  static sanitizeObject(obj, maxDepth = 5, currentDepth = 0) {
+    if (currentDepth >= maxDepth) {
+      return '[Max depth reached]';
+    }
+
+    if (obj === null || obj === undefined) {
+      return obj;
+    }
+
+    if (typeof obj === 'string') {
+      return this.sanitizeForLogging(obj);
+    }
+
+    if (typeof obj === 'number' || typeof obj === 'boolean') {
+      return obj;
+    }
+
+    if (Array.isArray(obj)) {
+      return obj.slice(0, 100).map(item =>
+        this.sanitizeObject(item, maxDepth, currentDepth + 1)
+      );
+    }
+
+    if (typeof obj === 'object') {
+      const sanitized = {};
+      const keys = Object.keys(obj).slice(0, 50); // Limit keys
+
+      for (const key of keys) {
+        const sanitizedKey = this.sanitizeForLogging(key);
+        sanitized[sanitizedKey] = this.sanitizeObject(obj[key], maxDepth, currentDepth + 1);
+      }
+
+      return sanitized;
+    }
+
+    return String(obj);
+  }
+
+  /**
+   * Validate request rate limiting parameters
+   */
+  static validateRateLimit(windowMs, maxRequests) {
+    const window = this.validateTimeout(windowMs, 1000, 3600000); // 1s to 1h
+    const max = parseInt(maxRequests, 10);
+
+    if (isNaN(max) || max < 1 || max > 10000) {
+      throw new Error('Max requests must be between 1 and 10000');
+    }
+
+    return { windowMs: window, maxRequests: max };
   }
 }
 
