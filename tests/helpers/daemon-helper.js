@@ -23,6 +23,10 @@ class TestDaemonHelper {
     // Find available port
     this.port = await this.findAvailablePort(10000, 11000);
 
+    // Set test environment variables to skip authentication
+    process.env.NODE_ENV = 'test';
+    process.env.STYXY_SKIP_AUTH = 'true';
+
     // Create daemon with test configuration
     const testConfig = getTestConfig({
       port: this.port,

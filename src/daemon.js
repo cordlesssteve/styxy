@@ -10,7 +10,11 @@ const express = require('express');
 const fs = require('fs');
 const path = require('path');
 const { v4: uuidv4 } = require('uuid');
+const lockfile = require('proper-lockfile');
 const PortScanner = require('./utils/port-scanner');
+const Validator = require('./utils/validator');
+const AuthMiddleware = require('./middleware/auth');
+const RateLimiter = require('./middleware/rate-limiter');
 
 class StyxyDaemon {
   constructor(options = {}) {
@@ -27,7 +31,19 @@ class StyxyDaemon {
     
     // Express app setup
     this.app = express();
-    this.app.use(express.json());
+    this.app.use(express.json({ limit: '10kb' })); // Limit JSON payload size
+
+    // Security middleware
+    this.auth = new AuthMiddleware(this.configDir);
+    this.rateLimiter = new RateLimiter({
+      windowMs: 60000, // 1 minute
+      maxRequests: 100, // 100 requests per minute
+      skipPaths: ['/status'] // Don't rate limit health checks
+    });
+
+    this.app.use(this.rateLimiter.limit());
+    this.app.use(this.auth.authenticate());
+
     this.setupRoutes();
     
     // Process monitoring
@@ -98,27 +114,38 @@ class StyxyDaemon {
     // Port allocation endpoint
     this.app.post('/allocate', async (req, res) => {
       try {
+        // Validate JSON payload size
+        const bodyStr = JSON.stringify(req.body);
+        Validator.validateJsonSize(bodyStr);
+
         const result = await this.allocatePort(req.body);
         res.json(result);
       } catch (error) {
-        res.status(400).json({ success: false, error: error.message });
+        res.status(400).json({
+          success: false,
+          error: Validator.sanitizeForLogging(error.message)
+        });
       }
     });
     
     // Port release endpoint
     this.app.delete('/allocate/:lockId', (req, res) => {
       try {
-        const result = this.releasePort(req.params.lockId);
+        const lockId = Validator.validateLockId(req.params.lockId);
+        const result = this.releasePort(lockId);
         res.json(result);
       } catch (error) {
-        res.status(400).json({ success: false, error: error.message });
+        res.status(400).json({
+          success: false,
+          error: Validator.sanitizeForLogging(error.message)
+        });
       }
     });
     
     // Port availability check
     this.app.get('/check/:port', async (req, res) => {
       try {
-        const port = parseInt(req.params.port);
+        const port = Validator.validatePort(req.params.port);
         const available = await this.isPortAvailable(port);
         const portInfo = await this.portScanner.getPortInfo(port);
 
@@ -132,7 +159,10 @@ class StyxyDaemon {
           system_usage: available ? null : portInfo
         });
       } catch (error) {
-        res.status(500).json({ success: false, error: error.message });
+        res.status(500).json({
+          success: false,
+          error: Validator.sanitizeForLogging(error.message)
+        });
       }
     });
     
@@ -266,23 +296,26 @@ class StyxyDaemon {
    * Allocate a port for a service
    */
   async allocatePort({ service_type, service_name, preferred_port, instance_id, project_path }) {
-    // Validate input
-    if (!service_type) {
-      throw new Error('service_type is required');
+    // Validate all inputs
+    const validServiceType = Validator.validateServiceType(service_type, this.serviceTypes);
+    const validServiceName = service_name ? Validator.validateServiceName(service_name) : 'unnamed-service';
+    const validInstanceId = instance_id ? Validator.validateInstanceId(instance_id) : 'default';
+    const validProjectPath = project_path ? Validator.validateWorkingDirectory(project_path) : process.cwd();
+
+    let validPreferredPort;
+    if (preferred_port !== undefined) {
+      validPreferredPort = Validator.validatePort(preferred_port);
     }
-    
-    const serviceConfig = this.serviceTypes[service_type];
-    if (!serviceConfig) {
-      throw new Error(`Unknown service type: ${service_type}`);
-    }
+
+    const serviceConfig = this.serviceTypes[validServiceType];
     
     // Try preferred port first
-    if (preferred_port && await this.isPortAvailable(preferred_port)) {
-      return this.createAllocation(preferred_port, {
-        service_type,
-        service_name,
-        instance_id,
-        project_path
+    if (validPreferredPort && await this.isPortAvailable(validPreferredPort)) {
+      return this.createAllocation(validPreferredPort, {
+        service_type: validServiceType,
+        service_name: validServiceName,
+        instance_id: validInstanceId,
+        project_path: validProjectPath
       });
     }
     
@@ -378,21 +411,32 @@ class StyxyDaemon {
   }
   
   /**
-   * Save current state to disk
+   * Save current state to disk with file locking
    */
-  saveState() {
+  async saveState() {
     try {
       const state = {
         saved_at: new Date().toISOString(),
         allocations: Object.fromEntries(this.allocations),
         instances: Object.fromEntries(this.instances)
       };
-      
+
+      // Ensure directory exists with secure permissions
       if (!fs.existsSync(this.configDir)) {
-        fs.mkdirSync(this.configDir, { recursive: true });
+        fs.mkdirSync(this.configDir, { recursive: true, mode: 0o700 });
       }
-      
-      fs.writeFileSync(this.stateFile, JSON.stringify(state, null, 2));
+
+      // Use file locking to prevent corruption
+      const release = await lockfile.lock(this.stateFile, {
+        stale: 10000, // 10 seconds
+        update: 1000  // Check every second
+      });
+
+      try {
+        fs.writeFileSync(this.stateFile, JSON.stringify(state, null, 2), { mode: 0o600 });
+      } finally {
+        await release();
+      }
     } catch (error) {
       console.error('Failed to save state:', error.message);
     }
@@ -401,24 +445,45 @@ class StyxyDaemon {
   /**
    * Load state from disk
    */
-  loadState() {
+  async loadState() {
     try {
       if (fs.existsSync(this.stateFile)) {
-        const state = JSON.parse(fs.readFileSync(this.stateFile, 'utf8'));
+        // Use file locking to prevent reading corrupt data
+        const release = await lockfile.lock(this.stateFile, {
+          stale: 10000, // 10 seconds
+          update: 1000  // Check every second
+        });
 
-        // Convert port strings back to numbers for allocations
-        this.allocations = new Map();
-        if (state.allocations) {
-          for (const [portStr, allocation] of Object.entries(state.allocations)) {
-            this.allocations.set(parseInt(portStr), allocation);
+        try {
+          const stateData = fs.readFileSync(this.stateFile, 'utf8');
+          Validator.validateJsonSize(stateData, 1024 * 1024); // 1MB max
+          const state = JSON.parse(stateData);
+
+          // Convert port strings back to numbers for allocations
+          this.allocations = new Map();
+          if (state.allocations) {
+            for (const [portStr, allocation] of Object.entries(state.allocations)) {
+              const port = Validator.validatePort(portStr);
+              this.allocations.set(port, allocation);
+            }
           }
-        }
 
-        this.instances = new Map(Object.entries(state.instances || {}));
-        console.log(`Restored ${this.allocations.size} allocations from previous session`);
+          this.instances = new Map();
+          if (state.instances) {
+            for (const [instanceId, instance] of Object.entries(state.instances)) {
+              const validInstanceId = Validator.validateInstanceId(instanceId);
+              this.instances.set(validInstanceId, instance);
+            }
+          }
+
+          console.log(`Restored ${this.allocations.size} allocations from previous session`);
+        } finally {
+          await release();
+        }
       }
     } catch (error) {
       console.error('Failed to load state:', error.message);
+      console.log('Starting with clean state');
     }
   }
   
@@ -427,7 +492,7 @@ class StyxyDaemon {
    */
   async start() {
     // Load previous state
-    this.loadState();
+    await this.loadState();
     
     // Start HTTP server
     return new Promise((resolve, reject) => {
@@ -459,9 +524,9 @@ class StyxyDaemon {
   writePidFile() {
     try {
       if (!fs.existsSync(this.configDir)) {
-        fs.mkdirSync(this.configDir, { recursive: true });
+        fs.mkdirSync(this.configDir, { recursive: true, mode: 0o700 });
       }
-      fs.writeFileSync(this.pidFile, process.pid.toString());
+      fs.writeFileSync(this.pidFile, process.pid.toString(), { mode: 0o600 });
     } catch (error) {
       console.error('Failed to write PID file:', error.message);
     }

@@ -42,11 +42,13 @@ start_styxy_daemon() {
 
     # Look for styxy binary in common locations
     local styxy_binary=""
+    local script_dir="$(dirname "$0")"
     local search_paths=(
-        "$(dirname "$0")/../../../../bin/styxy"  # Relative to hook script location
-        "/home/cordlesssteve/projects/styxy/bin/styxy"
-        "$(which styxy 2>/dev/null)"
-        "./bin/styxy"
+        "${script_dir}/../../../../bin/styxy"  # Relative to hook script location
+        "${HOME}/projects/styxy/bin/styxy"    # Generic user home reference
+        "$(which styxy 2>/dev/null)"          # System PATH
+        "./bin/styxy"                         # Current directory
+        "/usr/local/bin/styxy"                # System install location
     )
 
     for path in "${search_paths[@]}"; do

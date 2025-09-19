@@ -96,15 +96,27 @@ class PortScanner {
    * Check port availability using ss (modern Linux)
    */
   async checkWithSS(port) {
+    // Validate port number to prevent command injection
+    const portNum = parseInt(port, 10);
+    if (isNaN(portNum) || portNum < 1 || portNum > 65535) {
+      throw new Error(`Invalid port number: ${port}`);
+    }
+
     try {
-      const result = execSync(`ss -tlnp | grep :${port}`, {
+      const result = execSync('ss -tlnp', {
         encoding: 'utf8',
         timeout: 3000,
         stdio: ['ignore', 'pipe', 'ignore']
       });
 
-      // If ss finds anything, port is not available
-      return result.trim().length === 0;
+      // Parse output safely instead of using grep with user input
+      const lines = result.split('\n');
+      for (const line of lines) {
+        if (line.includes(`:${portNum} `)) {
+          return false; // Port is in use
+        }
+      }
+      return true; // Port available
     } catch (error) {
       if (error.status === 1) {
         // ss returns 1 when no matches found (port available)
@@ -118,8 +130,14 @@ class PortScanner {
    * Check port availability using lsof (Unix-like systems)
    */
   async checkWithLsof(port) {
+    // Validate port number to prevent command injection
+    const portNum = parseInt(port, 10);
+    if (isNaN(portNum) || portNum < 1 || portNum > 65535) {
+      throw new Error(`Invalid port number: ${port}`);
+    }
+
     try {
-      const result = execSync(`lsof -i :${port}`, {
+      const result = execSync(`lsof -i :${portNum}`, {
         encoding: 'utf8',
         timeout: 3000,
         stdio: ['ignore', 'pipe', 'ignore']
@@ -169,18 +187,28 @@ class PortScanner {
    * Get detailed port info using ss
    */
   async getPortInfoWithSS(port) {
+    // Validate port number to prevent command injection
+    const portNum = parseInt(port, 10);
+    if (isNaN(portNum) || portNum < 1 || portNum > 65535) {
+      throw new Error(`Invalid port number: ${port}`);
+    }
+
     try {
-      const result = execSync(`ss -tlnp | grep :${port}`, {
+      const result = execSync('ss -tlnp', {
         encoding: 'utf8',
         timeout: 3000,
         stdio: ['ignore', 'pipe', 'ignore']
       });
 
-      if (!result.trim()) {
+      // Parse output safely instead of using grep with user input
+      const lines = result.split('\n');
+      const matchingLines = lines.filter(line => line.includes(`:${portNum} `));
+
+      if (matchingLines.length === 0) {
         return null;
       }
 
-      return this.parseSSOutput(result, port);
+      return this.parseSSOutput(matchingLines.join('\n'), portNum);
     } catch (error) {
       throw error;
     }
@@ -190,8 +218,14 @@ class PortScanner {
    * Get detailed port info using lsof
    */
   async getPortInfoWithLsof(port) {
+    // Validate port number to prevent command injection
+    const portNum = parseInt(port, 10);
+    if (isNaN(portNum) || portNum < 1 || portNum > 65535) {
+      throw new Error(`Invalid port number: ${port}`);
+    }
+
     try {
-      const result = execSync(`lsof -i :${port} -P`, {
+      const result = execSync(`lsof -i :${portNum} -P`, {
         encoding: 'utf8',
         timeout: 3000,
         stdio: ['ignore', 'pipe', 'ignore']
@@ -201,7 +235,7 @@ class PortScanner {
         return null;
       }
 
-      return this.parseLsofOutput(result, port);
+      return this.parseLsofOutput(result, portNum);
     } catch (error) {
       throw error;
     }
