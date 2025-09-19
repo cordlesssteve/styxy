@@ -11,6 +11,7 @@ STYXY_URL="${STYXY_URL:-http://localhost:9876}"
 HOOK_LOG_DIR="${HOME}/.claude/logs"
 HOOK_LOG_FILE="${HOOK_LOG_DIR}/styxy-hooks.log"
 INSTANCE_STATE_FILE="${HOME}/.claude/styxy-instance-state"
+STYXY_AUTH_TOKEN_FILE="${HOME}/.styxy/auth.token"
 
 # Ensure log directory exists
 mkdir -p "${HOOK_LOG_DIR}"
@@ -25,13 +26,23 @@ generate_instance_id() {
     echo "claude-code-$(date +%s)-$$"
 }
 
+
 # Check if Styxy daemon is running
 check_styxy_daemon() {
     local response
-    if response=$(curl -s --max-time 3 "${STYXY_URL}/status" 2>/dev/null); then
-        if echo "${response}" | grep -q '"status":"running"'; then
-            return 0
-        fi
+    local auth_token=""
+    if [[ -f "${STYXY_AUTH_TOKEN_FILE}" ]]; then
+        auth_token=$(cat "${STYXY_AUTH_TOKEN_FILE}")
+    fi
+
+    if [[ -n "${auth_token}" ]]; then
+        response=$(curl -s --max-time 3 -H "Authorization: Bearer ${auth_token}" "${STYXY_URL}/status" 2>/dev/null)
+    else
+        response=$(curl -s --max-time 3 "${STYXY_URL}/status" 2>/dev/null)
+    fi
+
+    if [[ $? -eq 0 ]] && echo "${response}" | grep -q '"status":"running"'; then
+        return 0
     fi
     return 1
 }
@@ -65,8 +76,8 @@ start_styxy_daemon() {
 
     log "Found styxy binary at: $styxy_binary"
 
-    # Start daemon in background using --daemon flag
-    if "$styxy_binary" daemon start --port 9876 --daemon >/dev/null 2>&1; then
+    # Start daemon in background using --detach flag
+    if "$styxy_binary" daemon start --port 9876 --detach >/dev/null 2>&1; then
         # Wait a moment for daemon to initialize
         sleep 3
 
@@ -105,9 +116,24 @@ EOF
 )
 
     local response
-    if response=$(curl -s --max-time 10 -X POST "${STYXY_URL}/instance/register" \
+    local auth_token=""
+    if [[ -f "${STYXY_AUTH_TOKEN_FILE}" ]]; then
+        auth_token=$(cat "${STYXY_AUTH_TOKEN_FILE}")
+    fi
+
+    log "Attempting instance registration..."
+    if [[ -n "${auth_token}" ]]; then
+        response=$(curl -s --max-time 10 -X POST "${STYXY_URL}/instance/register" \
                        -H "Content-Type: application/json" \
-                       -d "${payload}" 2>/dev/null); then
+                       -H "Authorization: Bearer ${auth_token}" \
+                       -d "${payload}" 2>&1)
+    else
+        response=$(curl -s --max-time 10 -X POST "${STYXY_URL}/instance/register" \
+                       -H "Content-Type: application/json" \
+                       -d "${payload}" 2>&1)
+    fi
+
+    if [[ $? -eq 0 ]]; then
 
         if echo "${response}" | grep -q '"success":true'; then
             log "Instance ${instance_id} registered successfully"
@@ -119,7 +145,7 @@ EOF
             return 1
         fi
     else
-        log "Failed to connect to Styxy daemon at ${STYXY_URL}"
+        log "Failed to connect to Styxy daemon at ${STYXY_URL}, response: ${response}"
         return 1
     fi
 }
@@ -139,11 +165,22 @@ start_heartbeat() {
         fi
     fi
 
+    # Get auth token for heartbeat
+    local auth_token=""
+    if [[ -f "${STYXY_AUTH_TOKEN_FILE}" ]]; then
+        auth_token=$(cat "${STYXY_AUTH_TOKEN_FILE}")
+    fi
+
     # Start new heartbeat process (fully detached)
     nohup bash -c "
         while true; do
+            local auth_args=''
+            if [[ -n '${auth_token}' ]]; then
+                auth_args='-H Authorization: Bearer ${auth_token}'
+            fi
             if ! curl -s --max-time 5 -X PUT '${STYXY_URL}/instance/${instance_id}/heartbeat' \
                       -H 'Content-Type: application/json' \
+                      \${auth_args} \
                       -d '{}' >/dev/null 2>&1; then
                 echo \"[$(date '+%Y-%m-%d %H:%M:%S')] [Heartbeat] Failed for instance ${instance_id}\" >> '${HOOK_LOG_FILE}'
             fi

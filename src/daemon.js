@@ -532,7 +532,11 @@ class StyxyDaemon {
     const allocation = {
       ...metadata,
       port,
-      lock_id: lockId,
+      lockId: lockId,
+      serviceType: metadata.service_type,
+      serviceName: metadata.service_name,
+      instanceId: metadata.instance_id,
+      projectPath: metadata.project_path,
       process_id: process.pid,
       allocated_at: new Date().toISOString(),
       userAgent: requestContext.userAgent || 'unknown',
@@ -571,7 +575,7 @@ class StyxyDaemon {
    */
   async releasePort(lockId) {
     for (const [port, allocation] of this.allocations) {
-      if (allocation.lock_id === lockId) {
+      if (allocation.lockId === lockId) {
         this.allocations.delete(port);
         await this.saveState();
 

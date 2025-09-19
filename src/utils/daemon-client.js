@@ -2,6 +2,8 @@
  * Enhanced Daemon Client with Retry Logic and Circuit Breaker
  */
 
+const fs = require('fs');
+const path = require('path');
 const Logger = require('./logger');
 const CircuitBreaker = require('./circuit-breaker');
 
@@ -12,12 +14,28 @@ class DaemonClient {
     this.baseDelay = options.baseDelay || 1000; // 1 second
     this.maxDelay = options.maxDelay || 10000; // 10 seconds
     this.timeout = options.timeout || 5000; // 5 seconds
+    this.configDir = options.configDir || path.join(process.env.HOME, '.styxy');
+    this.tokenFile = path.join(this.configDir, 'auth.token');
     this.circuitBreaker = new CircuitBreaker({
       name: 'daemon-client',
       failureThreshold: 5,
       recoveryTimeout: 30000,
       expectedErrors: ['ECONNREFUSED', 'TIMEOUT']
     });
+  }
+
+  /**
+   * Load authentication token
+   */
+  getAuthToken() {
+    try {
+      if (fs.existsSync(this.tokenFile)) {
+        return fs.readFileSync(this.tokenFile, 'utf8').trim();
+      }
+    } catch (error) {
+      this.logger.warn('Failed to load auth token', { error: error.message });
+    }
+    return null;
   }
 
   /**
@@ -95,8 +113,16 @@ class DaemonClient {
             controller.abort();
           }, this.timeout);
 
+          // Add authentication header if token is available
+          const headers = { ...options.headers };
+          const authToken = this.getAuthToken();
+          if (authToken) {
+            headers['Authorization'] = `Bearer ${authToken}`;
+          }
+
           const response = await fetch(url, {
             ...options,
+            headers,
             signal: controller.signal
           });
 

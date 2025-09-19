@@ -8,6 +8,8 @@ set -euo pipefail
 
 # Configuration
 STYXY_URL="${STYXY_URL:-http://localhost:9876}"
+STYXY_CONFIG_DIR="${HOME}/.styxy"
+STYXY_TOKEN_FILE="${STYXY_CONFIG_DIR}/auth.token"
 HOOK_LOG_DIR="${HOME}/.claude/logs"
 HOOK_LOG_FILE="${HOOK_LOG_DIR}/styxy-hooks.log"
 INSTANCE_STATE_FILE="${HOME}/.claude/styxy-instance-state"
@@ -57,27 +59,55 @@ extract_existing_port() {
     echo "${port}"
 }
 
+# Get API token for authentication
+get_auth_token() {
+    if [[ -f "${STYXY_TOKEN_FILE}" ]]; then
+        cat "${STYXY_TOKEN_FILE}"
+    else
+        echo ""
+    fi
+}
+
 # Allocate port from Styxy
 allocate_port() {
     local preferred_port="$1"
     local instance_id="$2"
     local project_path="${CLAUDE_PROJECT_DIR:-$(pwd)}"
+    local auth_token
+    auth_token=$(get_auth_token)
 
     local payload
-    payload=$(cat <<EOF
+    if [[ -n "${preferred_port}" ]]; then
+        payload=$(cat <<EOF
 {
   "service_type": "test",
   "service_name": "cypress-e2e",
-  "preferred_port": ${preferred_port:-null},
+  "preferred_port": ${preferred_port},
   "instance_id": "${instance_id}",
   "project_path": "${project_path}"
 }
 EOF
 )
+    else
+        payload=$(cat <<EOF
+{
+  "service_type": "test",
+  "service_name": "cypress-e2e",
+  "instance_id": "${instance_id}",
+  "project_path": "${project_path}"
+}
+EOF
+)
+    fi
 
     local response
+    local curl_headers=("-H" "Content-Type: application/json")
+    if [[ -n "${auth_token}" ]]; then
+        curl_headers+=("-H" "Authorization: Bearer ${auth_token}")
+    fi
+
     if response=$(curl -s --max-time 10 -X POST "${STYXY_URL}/allocate" \
-                       -H "Content-Type: application/json" \
+                       "${curl_headers[@]}" \
                        -d "${payload}" 2>/dev/null); then
 
         if echo "${response}" | grep -q '"success":true'; then
