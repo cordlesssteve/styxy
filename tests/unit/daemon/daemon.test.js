@@ -177,20 +177,21 @@ describe('StyxyDaemon', () => {
       daemon = new StyxyDaemon({ configDir: tmpDir.name });
     });
 
-    it('should save and load state correctly', () => {
+    it('should save and load state correctly', async () => {
       // Create test data
       daemon.allocations.set(3000, {
-        service_type: 'dev',
-        lock_id: 'test-lock-id',
+        serviceType: 'dev',
+        lockId: '12345678-1234-4567-8901-123456789012',
         allocated_at: new Date().toISOString()
       });
 
       daemon.instances.set('test-instance', {
-        registered_at: new Date().toISOString()
+        id: 'test-instance',
+        lastHeartbeat: new Date().toISOString()
       });
 
       // Save state
-      daemon.saveState();
+      await daemon.saveState();
 
       // Verify file exists
       const stateFile = path.join(tmpDir.name, 'daemon.state');
@@ -201,7 +202,7 @@ describe('StyxyDaemon', () => {
       daemon.instances.clear();
 
       // Load state
-      daemon.loadState();
+      await daemon.loadState();
 
       // Verify state restored - convert to number key for Map comparison
       expect(daemon.allocations.has(3000)).toBe(true);

@@ -692,7 +692,7 @@ class StyxyDaemon {
               ...allocation,
               port,
               lockId: Validator.validateLockId(allocation.lockId),
-              serviceType: Validator.validateServiceType(allocation.serviceType)
+              serviceType: Validator.validateServiceType(allocation.serviceType, this.serviceTypes)
             };
             this.allocations.set(port, validAllocation);
           } catch (error) {
