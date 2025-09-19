@@ -36,6 +36,52 @@ check_styxy_daemon() {
     return 1
 }
 
+# Start Styxy daemon if not running
+start_styxy_daemon() {
+    log "Starting Styxy daemon..."
+
+    # Look for styxy binary in common locations
+    local styxy_binary=""
+    local search_paths=(
+        "$(dirname "$0")/../../../../bin/styxy"  # Relative to hook script location
+        "/home/cordlesssteve/projects/styxy/bin/styxy"
+        "$(which styxy 2>/dev/null)"
+        "./bin/styxy"
+    )
+
+    for path in "${search_paths[@]}"; do
+        if [[ -x "$path" ]]; then
+            styxy_binary="$path"
+            break
+        fi
+    done
+
+    if [[ -z "$styxy_binary" ]]; then
+        log "Could not find styxy binary in expected locations"
+        return 1
+    fi
+
+    log "Found styxy binary at: $styxy_binary"
+
+    # Start daemon in background using --daemon flag
+    if "$styxy_binary" daemon start --port 9876 --daemon >/dev/null 2>&1; then
+        # Wait a moment for daemon to initialize
+        sleep 3
+
+        # Verify daemon started successfully
+        if check_styxy_daemon; then
+            log "Styxy daemon started successfully"
+            return 0
+        else
+            log "Styxy daemon failed to start properly"
+            return 1
+        fi
+    else
+        log "Failed to execute styxy daemon start command"
+        return 1
+    fi
+}
+
 # Register instance with Styxy daemon
 register_instance() {
     local instance_id="$1"
@@ -91,17 +137,17 @@ start_heartbeat() {
         fi
     fi
 
-    # Start new heartbeat process
-    (
+    # Start new heartbeat process (fully detached)
+    nohup bash -c "
         while true; do
-            if ! curl -s --max-time 5 -X PUT "${STYXY_URL}/instance/${instance_id}/heartbeat" \
-                      -H "Content-Type: application/json" \
-                      -d "{}" >/dev/null 2>&1; then
-                log "Heartbeat failed for instance ${instance_id}"
+            if ! curl -s --max-time 5 -X PUT '${STYXY_URL}/instance/${instance_id}/heartbeat' \
+                      -H 'Content-Type: application/json' \
+                      -d '{}' >/dev/null 2>&1; then
+                echo \"[$(date '+%Y-%m-%d %H:%M:%S')] [Heartbeat] Failed for instance ${instance_id}\" >> '${HOOK_LOG_FILE}'
             fi
             sleep 30
         done
-    ) &
+    " >/dev/null 2>&1 &
 
     local heartbeat_pid=$!
     echo "${heartbeat_pid}" > "${heartbeat_pid_file}"
@@ -112,11 +158,19 @@ start_heartbeat() {
 main() {
     log "Starting Styxy integration setup"
 
-    # Check if Styxy daemon is available
+    # Check if Styxy daemon is available, start if needed
     if ! check_styxy_daemon; then
-        log "Styxy daemon not available at ${STYXY_URL} - continuing without integration"
-        echo "⚠️  Styxy daemon not available - port coordination disabled"
-        return 0
+        log "Styxy daemon not running, attempting to start..."
+
+        if start_styxy_daemon; then
+            log "Successfully started Styxy daemon"
+        else
+            log "Failed to start Styxy daemon - continuing without integration"
+            echo "⚠️  Could not start Styxy daemon - port coordination disabled"
+            return 0
+        fi
+    else
+        log "Styxy daemon already running"
     fi
 
     # Generate or reuse instance ID
