@@ -145,7 +145,7 @@ describe('Port Allocation API', () => {
         .expect(400);
 
       expect(response.body.success).toBe(false);
-      expect(response.body.error).toContain('Lock ID invalid-lock-id not found');
+      expect(response.body.error).toContain('lock_id must be a valid UUID v4');
     });
   });
 

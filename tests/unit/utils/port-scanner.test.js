@@ -51,7 +51,7 @@ describe('PortScanner', () => {
 
       expect(result).toBe(true);
       expect(execSync).toHaveBeenCalledWith(
-        'ss -tlnp | grep :3000',
+        'ss -tlnp',
         expect.any(Object)
       );
     });

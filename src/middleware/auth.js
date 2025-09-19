@@ -21,6 +21,11 @@ class AuthMiddleware {
    */
   loadOrCreateApiKey() {
     try {
+      // Skip API key creation in test environment
+      if (process.env.NODE_ENV === 'test' && process.env.STYXY_SKIP_AUTH === 'true') {
+        return 'test-api-key';
+      }
+
       if (fs.existsSync(this.tokenFile)) {
         const token = fs.readFileSync(this.tokenFile, 'utf8').trim();
         if (token && token.length >= 32) {

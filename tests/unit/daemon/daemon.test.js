@@ -134,16 +134,16 @@ describe('StyxyDaemon', () => {
         preferred_port: 3000
       });
 
-      const result = daemon.releasePort(allocation.lock_id);
+      const result = await daemon.releasePort(allocation.lock_id);
 
       expect(result.success).toBe(true);
       expect(result.port).toBe(3000);
       expect(daemon.allocations.has(3000)).toBe(false);
     });
 
-    it('should throw error for invalid lock ID', () => {
-      expect(() => daemon.releasePort('invalid-lock-id'))
-        .toThrow('Lock ID invalid-lock-id not found');
+    it('should throw error for invalid lock ID', async () => {
+      await expect(daemon.releasePort('invalid-lock-id'))
+        .rejects.toThrow('Lock ID invalid-lock-id not found');
     });
   });
 
@@ -152,14 +152,14 @@ describe('StyxyDaemon', () => {
       daemon = new StyxyDaemon({ configDir: tmpDir.name });
     });
 
-    it('should create allocation with metadata', () => {
+    it('should create allocation with metadata', async () => {
       const metadata = {
         service_type: 'dev',
         service_name: 'test-service',
         instance_id: 'test-instance'
       };
 
-      const result = daemon.createAllocation(3000, metadata);
+      const result = await daemon.createAllocation(3000, metadata);
 
       expect(result.success).toBe(true);
       expect(result.port).toBe(3000);
@@ -214,7 +214,7 @@ describe('StyxyDaemon', () => {
       daemon = new StyxyDaemon({ configDir: tmpDir.name });
     });
 
-    it('should clean up stale allocations when forced', () => {
+    it('should clean up stale allocations when forced', async () => {
       // Create test allocation
       daemon.allocations.set(3000, {
         service_type: 'dev',
@@ -222,14 +222,14 @@ describe('StyxyDaemon', () => {
         allocated_at: new Date(Date.now() - 2 * 60 * 60 * 1000).toISOString() // 2 hours ago
       });
 
-      const result = daemon.performCleanup(true);
+      const result = await daemon.performCleanup(true);
 
       expect(result.success).toBe(true);
       expect(result.cleaned).toBe(1);
       expect(daemon.allocations.size).toBe(0);
     });
 
-    it('should clean up old allocations without force', () => {
+    it('should clean up old allocations without force', async () => {
       // Create old allocation (> 1 hour)
       daemon.allocations.set(3000, {
         service_type: 'dev',
@@ -244,7 +244,7 @@ describe('StyxyDaemon', () => {
         allocated_at: new Date().toISOString()
       });
 
-      const result = daemon.performCleanup(false);
+      const result = await daemon.performCleanup(false);
 
       expect(result.success).toBe(true);
       expect(result.cleaned).toBe(1);

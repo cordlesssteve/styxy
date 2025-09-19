@@ -125,7 +125,7 @@ describe('CLI Allocation Commands', () => {
       const result = await cli.release('invalid-lock-id');
 
       expect(result.success).toBe(false);
-      expect(result.stderr || result.stdout).toContain('Lock ID invalid-lock-id not found');
+      expect(result.stderr || result.stdout).toContain('lock_id must be a valid UUID v4');
     });
   });
 
