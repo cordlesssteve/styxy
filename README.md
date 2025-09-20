@@ -248,4 +248,22 @@ MIT License - see [LICENSE](./LICENSE) file for details.
 
 Styxy is **battle-tested** and ready for production use in multi-instance development environments. Perfect for Claude Code workflows, Firebase development, and complex microservice coordination.
 
+## 🔒 Security
+
+### Authentication
+- **Secure token generation** using `crypto.randomBytes(32)`
+- **File-based authentication** with 0600 permissions (user-only access)
+- **Automatic token management** - tokens stored outside repository
+- **Masked logging** - API keys are masked in logs for security
+
+### Environment Controls
+- `STYXY_SHOW_FULL_KEY=true` - Show full API key in logs (development only)
+- `STYXY_SKIP_AUTH=true` - Disable authentication (testing only)
+
+### Protected Files
+All sensitive files are automatically excluded from version control:
+- `*.token`, `*.key`, `*.secret` - Authentication files
+- `.styxy/` - Configuration directory
+- `auth.*` - Authentication-related files
+
 **Get Started:** Clone → `npm install` → `node src/daemon.js --daemon` → Start coordinating! 🎉

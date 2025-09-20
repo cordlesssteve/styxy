@@ -10,6 +10,13 @@ const fs = require('fs');
 const path = require('path');
 
 class AuthMiddleware {
+  /**
+   * Mask sensitive data for secure logging
+   */
+  static maskApiKey(apiKey) {
+    if (!apiKey || apiKey.length < 8) return '***';
+    return apiKey.substring(0, 4) + '***' + apiKey.substring(apiKey.length - 4);
+  }
   constructor(configDir) {
     this.configDir = configDir;
     this.tokenFile = path.join(configDir, 'auth.token');
@@ -45,7 +52,15 @@ class AuthMiddleware {
       // Write token with secure permissions
       fs.writeFileSync(this.tokenFile, newToken, { mode: 0o600 });
       console.log('✅ Generated new API key for authentication');
-      console.log(`🔑 API Key: ${newToken}`);
+
+      // Show full key only during initial setup, then recommend secure storage
+      if (process.env.NODE_ENV === 'development' || process.env.STYXY_SHOW_FULL_KEY === 'true') {
+        console.log(`🔑 API Key: ${newToken}`);
+        console.log('⚠️  This key will only be shown once. Store it securely.');
+      } else {
+        console.log(`🔑 API Key: ${AuthMiddleware.maskApiKey(newToken)}`);
+        console.log('💡 Full key saved securely to file');
+      }
       console.log('📁 Saved to:', this.tokenFile);
 
       return newToken;
@@ -134,7 +149,15 @@ class AuthMiddleware {
     this.apiKey = newToken;
 
     console.log('✅ Regenerated API key');
-    console.log(`🔑 New API Key: ${newToken}`);
+
+    // Show full key only in development or when explicitly requested
+    if (process.env.NODE_ENV === 'development' || process.env.STYXY_SHOW_FULL_KEY === 'true') {
+      console.log(`🔑 New API Key: ${newToken}`);
+      console.log('⚠️  This key will only be shown once. Store it securely.');
+    } else {
+      console.log(`🔑 New API Key: ${AuthMiddleware.maskApiKey(newToken)}`);
+      console.log('💡 Full key saved securely to file');
+    }
 
     return newToken;
   }

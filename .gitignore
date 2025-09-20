@@ -35,6 +35,10 @@ Thumbs.db
 .styxy/
 config/local.json
 *.state
+*.token
+auth.*
+*.key
+*.secret
 
 # Testing
 coverage/
