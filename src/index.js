@@ -17,6 +17,7 @@ const allocate = require('./commands/allocate');
 const check = require('./commands/check');
 const list = require('./commands/list');
 const cleanup = require('./commands/cleanup');
+const doctor = require('./commands/doctor');
 
 // Configure CLI program
 program
@@ -99,6 +100,13 @@ program
   .argument('<action>', 'Action to perform (show|validate|generate|instances)')
   .option('-f, --force', 'Force overwrite when generating config')
   .action(require('./commands/config'));
+
+// Health check and diagnostics
+program
+  .command('doctor')
+  .description('Run comprehensive health check and diagnostics')
+  .option('--json', 'Output result as JSON')
+  .action(doctor);
 
 // Parse command line arguments
 program.parse();

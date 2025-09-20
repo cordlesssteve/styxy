@@ -7,6 +7,7 @@
 
 const path = require('path');
 const fs = require('fs');
+const { ErrorFactory } = require('./enhanced-errors');
 
 class Validator {
   /**
@@ -14,11 +15,8 @@ class Validator {
    */
   static validatePort(port) {
     const portNum = parseInt(port, 10);
-    if (isNaN(portNum)) {
-      throw new Error(`Port must be a number, got: ${port}`);
-    }
-    if (portNum < 1 || portNum > 65535) {
-      throw new Error(`Port must be between 1-65535, got: ${portNum}`);
+    if (isNaN(portNum) || portNum < 1 || portNum > 65535) {
+      throw ErrorFactory.invalidPort(port);
     }
     return portNum;
   }
@@ -41,7 +39,7 @@ class Validator {
     }
 
     if (allowedTypes && !allowedTypes.hasOwnProperty(serviceType)) {
-      throw new Error(`Unknown service type: ${serviceType}. Allowed: ${Object.keys(allowedTypes).join(', ')}`);
+      throw ErrorFactory.invalidServiceType(serviceType, Object.keys(allowedTypes));
     }
 
     return serviceType;

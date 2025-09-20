@@ -19,6 +19,7 @@ const Logger = require('./utils/logger');
 const StateManager = require('./utils/state-manager');
 const CircuitBreaker = require('./utils/circuit-breaker');
 const Metrics = require('./utils/metrics');
+const { ErrorFactory } = require('./utils/enhanced-errors');
 
 class StyxyDaemon {
   constructor(options = {}) {
@@ -153,10 +154,16 @@ class StyxyDaemon {
       } catch (error) {
         endTimer();
         this.metrics.incrementCounter('allocation_errors_total');
-        res.status(400).json({
-          success: false,
-          error: Validator.sanitizeForLogging(error.message)
-        });
+
+        // Enhanced error response
+        if (error.toJSON) {
+          res.status(400).json(error.toJSON());
+        } else {
+          res.status(400).json({
+            success: false,
+            error: Validator.sanitizeForLogging(error.message)
+          });
+        }
       }
     });
     
@@ -510,6 +517,8 @@ class StyxyDaemon {
 
     // Try service range
     const [start, end] = serviceConfig.range;
+    const allocatedPorts = [];
+
     for (let port = start; port <= end; port++) {
       if (await this.isPortAvailable(port)) {
         return this.createAllocation(port, {
@@ -518,10 +527,13 @@ class StyxyDaemon {
           instance_id,
           project_path
         }, requestContext);
+      } else {
+        allocatedPorts.push(port);
       }
     }
-    
-    throw new Error(`No available ports in range ${start}-${end} for service type ${service_type}`);
+
+    // Use enhanced error with actionable suggestions
+    throw ErrorFactory.portRangeExhausted(service_type, start, end, allocatedPorts);
   }
   
   /**

@@ -80,7 +80,7 @@ describe('CLI Allocation Commands', () => {
 
       expect(result.success).toBe(false);
       expect(result.json.success).toBe(false);
-      expect(result.json.error).toContain('Unknown service type');
+      expect(result.json.error).toContain('Invalid service type');
     });
 
     it('should include project path when specified', async () => {

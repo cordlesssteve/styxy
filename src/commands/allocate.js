@@ -3,6 +3,7 @@
  */
 
 const { daemonRequest } = require('../utils/daemon-client');
+const { ErrorFactory } = require('../utils/enhanced-errors');
 
 async function allocate(options) {
   try {
@@ -35,14 +36,36 @@ async function allocate(options) {
       console.log(`Lock ID: ${result.lock_id}`);
       console.log(`\nUse this port for your ${options.service} service: ${result.port}`);
     } else {
-      console.error(`❌ Allocation failed: ${result.error}`);
+      // Check if enhanced error format is available
+      if (result.context && result.context.suggestions) {
+        console.error(`❌ ${result.error}\n`);
+
+        if (result.context.suggestions.length > 0) {
+          console.error('💡 Suggestions:');
+          result.context.suggestions.forEach(suggestion => {
+            console.error(`   • ${suggestion}`);
+          });
+        }
+
+        if (result.context.help_url) {
+          console.error(`\n📖 More help: ${result.context.help_url}`);
+        }
+      } else {
+        console.error(`❌ Allocation failed: ${result.error}`);
+      }
       process.exit(1);
     }
   } catch (error) {
     if (options.json) {
       console.log(JSON.stringify({ success: false, error: error.message }));
     } else {
-      console.error(`❌ Error: ${error.message}`);
+      // Handle connection errors with enhanced messages
+      if (error.code === 'ECONNREFUSED' || error.message.includes('ECONNREFUSED')) {
+        const enhancedError = ErrorFactory.daemonUnavailable();
+        console.error(enhancedError.toCLIMessage());
+      } else {
+        console.error(`❌ Error: ${error.message}`);
+      }
     }
     process.exit(1);
   }
