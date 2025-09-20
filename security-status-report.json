@@ -1,0 +1,89 @@
+{
+  "timestamp": "2025-09-19T16:21:25.017Z",
+  "projectLanguages": [
+    "javascript"
+  ],
+  "toolFiltering": {
+    "skippedCategories": [
+      "python",
+      "container"
+    ],
+    "skipReasons": {
+      "python": "No python files detected in project",
+      "container": "No docker files detected in project"
+    }
+  },
+  "summary": {
+    "totalTools": 7,
+    "toolsWorking": 4,
+    "toolsFailed": 3,
+    "toolsSkipped": 0,
+    "applicableTools": 7,
+    "criticalFindings": 0,
+    "highFindings": 0,
+    "mediumFindings": 0
+  },
+  "tools": {
+    "npm-audit": {
+      "status": "failed",
+      "error": "Command failed with exit code 1: npm warn audit 400 Bad Request - POST https://registry.npmjs.org/-/npm/v1/security/audits/quick - Bad Request\nnpm error audit endpoint returned an error\nnpm error A complete log of this run can be found in: /home/cordlesssteve/.npm/_logs/2025-09-19T16_21_25_170Z-debug-0.log\n",
+      "category": "javascript"
+    },
+    "eslint": {
+      "status": "working",
+      "version": "v8.57.1",
+      "category": "javascript"
+    },
+    "jshint": {
+      "status": "working",
+      "version": "",
+      "category": "javascript"
+    },
+    "typescript": {
+      "status": "working",
+      "version": "Version 5.8.3",
+      "category": "javascript"
+    },
+    "flow": {
+      "status": "failed",
+      "error": "Command failed with exit code 1: npm error could not determine executable to run\nnpm error A complete log of this run can be found in: /home/cordlesssteve/.npm/_logs/2025-09-19T16_21_41_052Z-debug-0.log\n",
+      "category": "javascript"
+    },
+    "madge": {
+      "status": "working",
+      "version": "8.0.0",
+      "category": "javascript"
+    },
+    "formal-methods-hub": {
+      "status": "failed",
+      "error": "Command failed with exit code 1: node:internal/modules/cjs/loader:1215\n  throw err;\n  ^\n\nError: Cannot find module '/home/cordlesssteve/projects/Utility/styxy/packages/formal-methods-adapters/index.js'\n    at Module._resolveFilename (node:internal/modules/cjs/loader:1212:15)\n    at Module._load (node:internal/modules/cjs/loader:1043:27)\n    at Function.executeUserEntryPoint [as runMain] (node:internal/modules/run_main:164:12)\n    at node:internal/main/run_main_module:28:49 {\n  code: 'MODULE_NOT_FOUND',\n  requireStack: []\n}\n\nNode.js v20.19.3\n",
+      "category": "integration"
+    }
+  },
+  "recommendations": [
+    {
+      "priority": "high",
+      "category": "tool-failures",
+      "title": "Fix Failed Tools",
+      "description": "3 tools are not working properly: npm-audit, flow, formal-methods-hub"
+    },
+    {
+      "priority": "high",
+      "category": "configuration",
+      "title": "Missing Security Configurations",
+      "description": "Some security configuration files are missing. Run security setup again."
+    },
+    {
+      "priority": "medium",
+      "category": "cicd",
+      "title": "Setup CI/CD Integration",
+      "description": "Configure automated security analysis in your CI/CD pipeline"
+    },
+    {
+      "priority": "high",
+      "category": "container",
+      "title": "Build Secure Container",
+      "description": "Run \"npm run docker-build\" to create the secure analysis container"
+    }
+  ]
+}
