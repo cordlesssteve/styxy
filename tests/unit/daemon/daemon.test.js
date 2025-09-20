@@ -17,8 +17,8 @@ describe('StyxyDaemon', () => {
   });
 
   afterEach(async () => {
-    if (daemon && daemon.server) {
-      await new Promise(resolve => daemon.server.close(resolve));
+    if (daemon) {
+      await daemon.stop();
     }
     if (tmpDir) {
       tmpDir.removeCallback();
@@ -95,7 +95,7 @@ describe('StyxyDaemon', () => {
     it('should reject invalid service type', async () => {
       await expect(daemon.allocatePort({
         service_type: 'invalid'
-      })).rejects.toThrow('Unknown service type: invalid');
+      })).rejects.toThrow('Invalid service type: invalid');
     });
 
     it('should require service_type parameter', async () => {

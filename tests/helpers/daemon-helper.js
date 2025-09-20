@@ -48,13 +48,10 @@ class TestDaemonHelper {
   }
 
   async stop() {
-    if (this.daemon && this.daemon.server) {
-      return new Promise((resolve) => {
-        this.daemon.server.close(() => {
-          this.daemon = null;
-          resolve();
-        });
-      });
+    if (this.daemon) {
+      // Call the full daemon stop method to clean up all timers and resources
+      await this.daemon.stop();
+      this.daemon = null;
     }
   }
 

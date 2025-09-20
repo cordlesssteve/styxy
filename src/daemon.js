@@ -758,6 +758,26 @@ class StyxyDaemon {
   }
   
   /**
+   * Perform cleanup at startup to clear stale allocations from previous runs
+   */
+  async performStartupCleanup() {
+    try {
+      this.logger.info('Performing startup cleanup');
+      const result = await this.performCleanup(false);
+
+      if (result.cleaned > 0) {
+        this.logger.info('Startup cleanup completed', {
+          cleaned: result.cleaned,
+          message: result.message
+        });
+      }
+    } catch (error) {
+      this.logger.warn('Startup cleanup failed', { error: error.message });
+      // Don't fail startup if cleanup fails
+    }
+  }
+
+  /**
    * Start the daemon
    */
   async start() {
@@ -772,6 +792,9 @@ class StyxyDaemon {
 
       // Load previous state with recovery
       await this.loadState();
+
+      // NEW: Perform startup cleanup to clear stale allocations
+      await this.performStartupCleanup();
 
       // Start HTTP server with timeout
       const serverStartTimeout = 30000; // 30 seconds
@@ -848,17 +871,96 @@ class StyxyDaemon {
   startCleanupTimer() {
     this.cleanupInterval = setInterval(async () => {
       await this.cleanupStaleAllocations();
-    }, 30000); // 30 seconds
+    }, 10000); // Reduced from 30000ms to 10000ms (10 seconds)
   }
   
   /**
-   * Cleanup stale allocations
+   * Check if an allocation is stale
+   */
+  async isAllocationStale(allocation, now = new Date()) {
+    // 1. Check allocation age (reduce from 1 hour to 30 minutes)
+    const allocatedAt = new Date(allocation.allocated_at);
+    const minutesSinceAllocation = (now - allocatedAt) / (1000 * 60);
+
+    if (minutesSinceAllocation > 30) {
+      return true;
+    }
+
+    // 2. Check if process is still alive
+    if (allocation.process_id) {
+      try {
+        // Use kill(pid, 0) to check if process exists without killing it
+        process.kill(allocation.process_id, 0);
+      } catch (error) {
+        if (error.code === 'ESRCH') {
+          // Process doesn't exist
+          return true;
+        }
+        // Other errors (EPERM, etc.) mean process exists but we can't signal it
+      }
+    }
+
+    // 3. Check if port is actually in use by the process
+    try {
+      const portInfo = await this.portScanner.getPortInfo(allocation.port);
+      if (portInfo && portInfo.pid && portInfo.pid !== allocation.process_id) {
+        // Port is being used by a different process
+        return true;
+      }
+    } catch (error) {
+      // If we can't check port usage, don't consider it stale based on this alone
+    }
+
+    return false;
+  }
+
+  /**
+   * Cleanup stale allocations - IMPROVED VERSION
    */
   async cleanupStaleAllocations() {
-    // TODO: Implement process liveness checking
-    // For now, just log that cleanup is running
-    if (this.allocations.size > 0) {
-      console.log(`Cleanup: ${this.allocations.size} allocations active`);
+    try {
+      let cleaned = 0;
+      const staleAllocations = [];
+      const now = new Date();
+
+      for (const [port, allocation] of this.allocations) {
+        const isStale = await this.isAllocationStale(allocation, now);
+        if (isStale) {
+          staleAllocations.push(port);
+        }
+      }
+
+      // Remove stale allocations
+      for (const port of staleAllocations) {
+        const allocation = this.allocations.get(port);
+        this.allocations.delete(port);
+        cleaned++;
+
+        this.logger.info('Cleaned stale allocation', {
+          port,
+          serviceType: allocation.serviceType,
+          allocatedAt: allocation.allocated_at,
+          reason: 'process_dead_or_expired'
+        });
+      }
+
+      if (cleaned > 0) {
+        await this.saveState();
+        this.lastCleanup = new Date().toISOString();
+        this.metrics.incrementCounter('stale_allocations_cleaned_total', cleaned);
+      }
+
+      // Log cleanup summary periodically
+      if (this.allocations.size > 0 && this.allocations.size % 10 === 0) {
+        this.logger.debug('Cleanup summary', {
+          totalAllocations: this.allocations.size,
+          cleanedThisRun: cleaned
+        });
+      }
+
+    } catch (error) {
+      this.logger.error('Cleanup failed', { error: error.message });
+      this.metrics.incrementCounter('cleanup_errors_total');
     }
   }
 
@@ -944,6 +1046,16 @@ class StyxyDaemon {
       // Clean up rate limiter resources
       if (this.rateLimiter) {
         this.rateLimiter.destroy();
+      }
+
+      // Clean up metrics timer
+      if (this.metrics) {
+        this.metrics.destroy();
+      }
+
+      // Clean up circuit breaker timers
+      if (this.portScannerBreaker) {
+        this.portScannerBreaker.destroy();
       }
 
       // Close HTTP server

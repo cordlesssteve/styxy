@@ -73,7 +73,7 @@ describe('Port Allocation API', () => {
         .expect(400);
 
       expect(response.body.success).toBe(false);
-      expect(response.body.error).toContain('Unknown service type');
+      expect(response.body.error).toContain('Invalid service type');
     });
 
     it('should return error when service_type is missing', async () => {
