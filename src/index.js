@@ -38,7 +38,7 @@ program
 program
   .command('allocate')
   .description('Allocate a port for a service')
-  .requiredOption('-s, --service <type>', 'Service type (dev, api, test, storybook, docs)')
+  .requiredOption('-s, --service <type>', 'Service type (dev, api, database, infrastructure, ai, messaging, coordination, test, storybook, docs, etc.)')
   .option('-p, --port <port>', 'Preferred port number')
   .option('-n, --name <name>', 'Service instance name')
   .option('--project <path>', 'Project path context')

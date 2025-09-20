@@ -21,11 +21,11 @@
       "examples": ["Express API", "FastAPI", "Backend services"]
     },
     "database": {
-      "description": "Database services and Firestore emulators",
-      "preferred_ports": [8080, 8081, 8082, 8083],
-      "port_range": [8080, 8099],
+      "description": "Database services and PostgreSQL instances",
+      "preferred_ports": [5430, 5431, 5432, 5433],
+      "port_range": [5430, 5499],
       "multi_instance_pattern": "sequential",
-      "examples": ["Firestore emulator", "Local databases"]
+      "examples": ["PostgreSQL", "MySQL", "Database services"]
     },
     "auth": {
       "description": "Authentication services and Firebase Auth",
@@ -96,6 +96,34 @@
       "port_range": [8200, 8299],
       "multi_instance_pattern": "sequential",
       "examples": ["Webpack", "Bundlers", "Build tools"]
+    },
+    "infrastructure": {
+      "description": "System infrastructure services",
+      "preferred_ports": [6370, 6371, 6372, 6373],
+      "port_range": [6370, 6399],
+      "multi_instance_pattern": "sequential",
+      "examples": ["Redis", "System caches", "Background services"]
+    },
+    "ai": {
+      "description": "AI and ML services",
+      "preferred_ports": [11430, 11431, 11432, 11433],
+      "port_range": [11400, 11499],
+      "multi_instance_pattern": "sequential",
+      "examples": ["Ollama", "Local LLMs", "AI inference servers"]
+    },
+    "messaging": {
+      "description": "Message queues and brokers",
+      "preferred_ports": [9050, 9051, 9052, 9053],
+      "port_range": [9050, 9098],
+      "multi_instance_pattern": "sequential",
+      "examples": ["Kafka", "RabbitMQ", "Message brokers"]
+    },
+    "coordination": {
+      "description": "Service coordination and management",
+      "preferred_ports": [9870, 9871, 9872, 9873],
+      "port_range": [9870, 9899],
+      "multi_instance_pattern": "sequential",
+      "examples": ["Styxy daemon", "Service coordinators", "Management APIs"]
     }
   },
   "instance_templates": {
@@ -107,7 +135,11 @@
         "auth": 0,
         "functions": 0,
         "ui": 0,
-        "hub": 0
+        "hub": 0,
+        "infrastructure": 0,
+        "ai": 0,
+        "messaging": 0,
+        "coordination": 0
       }
     },
     "dev": {
@@ -118,7 +150,11 @@
         "auth": 1,
         "functions": 1,
         "ui": 1,
-        "hub": 1
+        "hub": 1,
+        "infrastructure": 1,
+        "ai": 1,
+        "messaging": 1,
+        "coordination": 1
       }
     },
     "staging": {
@@ -129,7 +165,11 @@
         "auth": 2,
         "functions": 2,
         "ui": 2,
-        "hub": 2
+        "hub": 2,
+        "infrastructure": 2,
+        "ai": 2,
+        "messaging": 2,
+        "coordination": 2
       }
     },
     "features": {
@@ -140,7 +180,11 @@
         "auth": 3,
         "functions": 3,
         "ui": 3,
-        "hub": 3
+        "hub": 3,
+        "infrastructure": 3,
+        "ai": 3,
+        "messaging": 3,
+        "coordination": 3
       }
     }
   },
