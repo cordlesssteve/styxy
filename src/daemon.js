@@ -49,6 +49,11 @@ class StyxyDaemon {
     this.serviceTypes = this.loadServiceTypes();
     this.portScanner = new PortScanner();
 
+    // CONCURRENT ALLOCATION SAFETY
+    // Track ports being allocated (prevents race conditions)
+    this.allocationInProgress = new Set();
+    this.allocationMutex = new Map(); // Port -> Promise (for waiting)
+
     // Express app setup
     this.app = express();
     this.app.use(express.json({ limit: '10kb' })); // Limit JSON payload size
@@ -475,7 +480,7 @@ class StyxyDaemon {
   }
   
   /**
-   * Allocate a port for a service
+   * Allocate a port for a service (CONCURRENT-SAFE VERSION)
    */
   async allocatePort({ service_type, service_name, preferred_port, instance_id, project_path, userAgent, remoteIP }) {
     // Validate all inputs
@@ -490,50 +495,95 @@ class StyxyDaemon {
     }
 
     const serviceConfig = this.serviceTypes[validServiceType];
-    
     const requestContext = { userAgent, remoteIP };
 
-    // Try preferred port first
-    if (validPreferredPort && await this.isPortAvailable(validPreferredPort)) {
-      return this.createAllocation(validPreferredPort, {
+    // Build candidate ports list (preferred + service preferred + range)
+    const candidatePorts = [];
+
+    // Add preferred port first
+    if (validPreferredPort) {
+      candidatePorts.push(validPreferredPort);
+    }
+
+    // Add service preferred ports
+    for (const port of serviceConfig.preferred_ports) {
+      if (!candidatePorts.includes(port)) {
+        candidatePorts.push(port);
+      }
+    }
+
+    // Add service range ports
+    const [start, end] = serviceConfig.range;
+    for (let port = start; port <= end; port++) {
+      if (!candidatePorts.includes(port)) {
+        candidatePorts.push(port);
+      }
+    }
+
+    // Try to allocate from candidate ports using atomic reservation
+    const allocatedPorts = [];
+    for (const port of candidatePorts) {
+      const result = await this.tryAtomicAllocation(port, {
         service_type: validServiceType,
         service_name: validServiceName,
         instance_id: validInstanceId,
         project_path: validProjectPath
       }, requestContext);
-    }
 
-    // Try service preferred ports
-    for (const port of serviceConfig.preferred_ports) {
-      if (await this.isPortAvailable(port)) {
-        return this.createAllocation(port, {
-          service_type,
-          service_name,
-          instance_id,
-          project_path
-        }, requestContext);
-      }
-    }
-
-    // Try service range
-    const [start, end] = serviceConfig.range;
-    const allocatedPorts = [];
-
-    for (let port = start; port <= end; port++) {
-      if (await this.isPortAvailable(port)) {
-        return this.createAllocation(port, {
-          service_type,
-          service_name,
-          instance_id,
-          project_path
-        }, requestContext);
-      } else {
+      if (result.success) {
+        return result;
+      } else if (result.reason === 'allocated') {
         allocatedPorts.push(port);
       }
+      // If reason === 'in_progress', continue to next port immediately
     }
 
     // Use enhanced error with actionable suggestions
-    throw ErrorFactory.portRangeExhausted(service_type, start, end, allocatedPorts);
+    throw ErrorFactory.portRangeExhausted(validServiceType, start, end, allocatedPorts);
+  }
+
+  /**
+   * Atomically try to allocate a specific port (prevents race conditions)
+   */
+  async tryAtomicAllocation(port, metadata, requestContext) {
+    // Quick check: already allocated
+    if (this.allocations.has(port)) {
+      return { success: false, reason: 'allocated' };
+    }
+
+    // Quick check: allocation in progress
+    if (this.allocationInProgress.has(port)) {
+      return { success: false, reason: 'in_progress' };
+    }
+
+    // Atomic reservation: try to claim the port
+    if (!this.allocationInProgress.has(port)) {
+      this.allocationInProgress.add(port);
+
+      try {
+        // Double-check after claiming (another request might have allocated between checks)
+        if (this.allocations.has(port)) {
+          return { success: false, reason: 'allocated' };
+        }
+
+        // Check port availability (fast for managed ranges)
+        const available = await this.isPortAvailable(port);
+        if (!available) {
+          return { success: false, reason: 'unavailable' };
+        }
+
+        // SUCCESS: Create the allocation
+        const result = await this.createAllocation(port, metadata, requestContext);
+        return { success: true, ...result };
+
+      } finally {
+        // Always release the reservation
+        this.allocationInProgress.delete(port);
+      }
+    } else {
+      // Port reservation failed (another request got it)
+      return { success: false, reason: 'in_progress' };
+    }
   }
   
   /**
@@ -556,7 +606,11 @@ class StyxyDaemon {
     };
 
     this.allocations.set(port, allocation);
-    await this.saveState();
+
+    // Save state asynchronously (don't block the atomic operation)
+    this.saveState().catch(error => {
+      this.logger.error('Background state save failed', { error: error.message });
+    });
 
     // Audit logging
     this.logger.audit('PORT_ALLOCATED', {
@@ -624,13 +678,19 @@ class StyxyDaemon {
       return false;
     }
 
-    // Check OS-level port usage with circuit breaker and timeout
+    // PERFORMANCE OPTIMIZATION: Skip OS checks for ports in our managed ranges
+    // This eliminates 3+ second delays for ports we're coordinating
+    if (this.isPortInManagedRange(port)) {
+      return true; // Trust our allocation tracking for managed ports
+    }
+
+    // Only do expensive OS-level checks for ports outside our managed ranges
     try {
       const endTimer = this.metrics.startTimer('port_availability_check_duration');
 
       const available = await this.portScannerBreaker.execute(async () => {
         const timeoutPromise = new Promise((_, reject) => {
-          setTimeout(() => reject(new Error('Port check timeout')), 5000); // 5 second timeout
+          setTimeout(() => reject(new Error('Port check timeout')), 2000); // Reduced from 5s to 2s
         });
 
         const checkPromise = this.portScanner.isPortAvailable(port);
@@ -655,6 +715,21 @@ class StyxyDaemon {
       // Fallback to assuming available if check fails
       return true;
     }
+  }
+
+  /**
+   * Check if a port is within our managed service ranges
+   */
+  isPortInManagedRange(port) {
+    for (const serviceType of Object.values(this.serviceTypes)) {
+      if (serviceType.range) {
+        const [start, end] = serviceType.range;
+        if (port >= start && port <= end) {
+          return true;
+        }
+      }
+    }
+    return false;
   }
   
   /**
