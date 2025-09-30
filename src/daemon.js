@@ -46,7 +46,10 @@ class StyxyDaemon {
     // In-memory state
     this.allocations = new Map();
     this.instances = new Map();
+    this.singletonServices = new Map(); // Track single-instance services (Feature #1)
     this.serviceTypes = this.loadServiceTypes();
+    this.autoAllocationConfig = this.loadAutoAllocationConfig(); // Feature #2
+    this.autoAllocationRules = this.loadAutoAllocationRules(); // Feature #2
     this.portScanner = new PortScanner();
 
     // CONCURRENT ALLOCATION SAFETY
@@ -98,7 +101,9 @@ class StyxyDaemon {
       // Override with user configuration if exists
       if (fs.existsSync(userConfigFile)) {
         const userConfig = JSON.parse(fs.readFileSync(userConfigFile, 'utf8'));
-        config = { ...config, ...(userConfig.service_types || {}) };
+        // Transform user config to daemon format (same as CORE config)
+        const transformedUserConfig = this.transformCoreConfig(userConfig.service_types || {});
+        config = { ...config, ...transformedUserConfig };
         this.logger.info('Applied user configuration overrides');
       }
 
@@ -127,13 +132,121 @@ class StyxyDaemon {
         preferred_ports: config.preferred_ports,
         range: config.port_range,
         description: config.description,
-        examples: config.examples
+        examples: config.examples,
+        instance_behavior: Validator.validateInstanceBehavior(config.instance_behavior) // Feature #1: defaults to 'multi'
       };
     }
 
     return transformed;
   }
-  
+
+  /**
+   * Load auto-allocation configuration (Feature #2)
+   */
+  loadAutoAllocationConfig() {
+    const coreConfigFile = path.join(__dirname, '../config/core-ports.json');
+    const userConfigFile = path.join(this.configDir, 'config.json');
+
+    try {
+      // Default configuration
+      let config = {
+        enabled: false,
+        default_chunk_size: 10,
+        placement: 'after',
+        min_port: 10000,
+        max_port: 65000,
+        preserve_gaps: true,
+        gap_size: 10
+      };
+
+      // Load from CORE config
+      if (fs.existsSync(coreConfigFile)) {
+        const coreConfig = JSON.parse(fs.readFileSync(coreConfigFile, 'utf8'));
+        if (coreConfig.auto_allocation) {
+          config = { ...config, ...coreConfig.auto_allocation };
+        }
+      }
+
+      // Override with user config
+      if (fs.existsSync(userConfigFile)) {
+        const userConfig = JSON.parse(fs.readFileSync(userConfigFile, 'utf8'));
+        if (userConfig.auto_allocation) {
+          config = { ...config, ...userConfig.auto_allocation };
+        }
+      }
+
+      // Validate configuration
+      Validator.validateAutoAllocationConfig(config);
+
+      this.logger.info('Loaded auto-allocation configuration', {
+        enabled: config.enabled,
+        placement: config.placement,
+        chunk_size: config.default_chunk_size
+      });
+
+      return config;
+    } catch (error) {
+      this.logger.warn('Failed to load auto-allocation config, using defaults', {
+        error: error.message
+      });
+
+      return {
+        enabled: false,
+        default_chunk_size: 10,
+        placement: 'after',
+        min_port: 10000,
+        max_port: 65000,
+        preserve_gaps: true,
+        gap_size: 10
+      };
+    }
+  }
+
+  /**
+   * Load auto-allocation rules (Feature #2)
+   */
+  loadAutoAllocationRules() {
+    const coreConfigFile = path.join(__dirname, '../config/core-ports.json');
+    const userConfigFile = path.join(this.configDir, 'config.json');
+
+    try {
+      let rules = {};
+
+      // Load from CORE config
+      if (fs.existsSync(coreConfigFile)) {
+        const coreConfig = JSON.parse(fs.readFileSync(coreConfigFile, 'utf8'));
+        if (coreConfig.auto_allocation_rules) {
+          rules = { ...rules, ...coreConfig.auto_allocation_rules };
+        }
+      }
+
+      // Override with user config
+      if (fs.existsSync(userConfigFile)) {
+        const userConfig = JSON.parse(fs.readFileSync(userConfigFile, 'utf8'));
+        if (userConfig.auto_allocation_rules) {
+          rules = { ...rules, ...userConfig.auto_allocation_rules };
+        }
+      }
+
+      // Validate rules
+      if (Object.keys(rules).length > 0) {
+        Validator.validateAutoAllocationRules(rules);
+        this.logger.info('Loaded auto-allocation rules', {
+          ruleCount: Object.keys(rules).length,
+          patterns: Object.keys(rules)
+        });
+      }
+
+      return rules;
+    } catch (error) {
+      this.logger.warn('Failed to load auto-allocation rules, using empty rules', {
+        error: error.message
+      });
+
+      return {};
+    }
+  }
+
   /**
    * Setup Express routes for HTTP API
    */
@@ -497,6 +610,31 @@ class StyxyDaemon {
     const serviceConfig = this.serviceTypes[validServiceType];
     const requestContext = { userAgent, remoteIP };
 
+    // Feature #1: Check for singleton service behavior
+    if (serviceConfig.instance_behavior === 'single') {
+      const existingSingleton = this.getSingleton(validServiceType);
+      if (existingSingleton) {
+        // Singleton already exists, return existing allocation
+        this.logger.info('Singleton service reused', {
+          serviceType: validServiceType,
+          existingPort: existingSingleton.port,
+          existingInstanceId: existingSingleton.instanceId,
+          requestedInstanceId: validInstanceId
+        });
+
+        return {
+          port: existingSingleton.port,
+          lockId: existingSingleton.lockId,
+          message: `Service '${validServiceType}' only allows single instance`,
+          existing: true,
+          existingInstanceId: existingSingleton.instanceId,
+          existingPid: existingSingleton.pid,
+          allocatedAt: existingSingleton.allocatedAt
+        };
+      }
+      // If no singleton exists, proceed with normal allocation and register as singleton
+    }
+
     // Build candidate ports list (preferred + service preferred + range)
     const candidatePorts = [];
 
@@ -628,6 +766,17 @@ class StyxyDaemon {
       service_type: metadata.service_type
     });
 
+    // Feature #1: Register as singleton if service type requires it
+    const serviceConfig = this.serviceTypes[metadata.service_type];
+    if (serviceConfig && serviceConfig.instance_behavior === 'single') {
+      this.registerSingleton(metadata.service_type, {
+        port,
+        lockId,
+        instanceId: metadata.instance_id,
+        pid: allocation.process_id
+      });
+    }
+
     return {
       success: true,
       port,
@@ -643,6 +792,13 @@ class StyxyDaemon {
     for (const [port, allocation] of this.allocations) {
       if (allocation.lockId === lockId) {
         this.allocations.delete(port);
+
+        // Feature #1: Release singleton if this was a singleton service
+        const serviceConfig = this.serviceTypes[allocation.serviceType];
+        if (serviceConfig && serviceConfig.instance_behavior === 'single') {
+          this.releaseSingleton(allocation.serviceType);
+        }
+
         await this.saveState();
 
         // Audit logging
@@ -731,7 +887,54 @@ class StyxyDaemon {
     }
     return false;
   }
-  
+
+  /**
+   * Register a service as a singleton (Feature #1: Single-Instance Services)
+   */
+  registerSingleton(serviceType, allocationInfo) {
+    if (!serviceType || typeof serviceType !== 'string') {
+      throw new Error('Service type required for singleton registration');
+    }
+
+    this.singletonServices.set(serviceType, {
+      serviceType,
+      port: allocationInfo.port,
+      lockId: allocationInfo.lockId,
+      instanceId: allocationInfo.instanceId,
+      pid: allocationInfo.pid,
+      allocatedAt: Date.now()
+    });
+
+    this.logger.info('Registered singleton service', {
+      serviceType,
+      port: allocationInfo.port,
+      instanceId: allocationInfo.instanceId
+    });
+  }
+
+  /**
+   * Get singleton service info if exists (Feature #1: Single-Instance Services)
+   */
+  getSingleton(serviceType) {
+    return this.singletonServices.get(serviceType);
+  }
+
+  /**
+   * Release singleton service, allowing new allocation (Feature #1: Single-Instance Services)
+   */
+  releaseSingleton(serviceType) {
+    const singleton = this.singletonServices.get(serviceType);
+    if (singleton) {
+      this.singletonServices.delete(serviceType);
+      this.logger.info('Released singleton service', {
+        serviceType,
+        port: singleton.port
+      });
+      return true;
+    }
+    return false;
+  }
+
   /**
    * Save current state with enhanced integrity protection
    */
@@ -746,6 +949,10 @@ class StyxyDaemon {
         instances: Array.from(this.instances.entries()).map(([id, instance]) => ({
           ...instance,
           id
+        })),
+        singletonServices: Array.from(this.singletonServices.entries()).map(([serviceType, singleton]) => ({
+          ...singleton,
+          serviceType
         }))
       };
 
@@ -773,6 +980,7 @@ class StyxyDaemon {
 
       this.allocations = new Map();
       this.instances = new Map();
+      this.singletonServices = new Map();
 
       // Load allocations
       if (state.allocations) {
@@ -815,9 +1023,32 @@ class StyxyDaemon {
         }
       }
 
+      // Load singleton services (Feature #1)
+      if (state.singletonServices) {
+        for (const singleton of state.singletonServices) {
+          try {
+            const serviceType = Validator.validateServiceType(singleton.serviceType, this.serviceTypes);
+            const validSingleton = {
+              ...singleton,
+              serviceType,
+              port: Validator.validatePort(singleton.port),
+              lockId: Validator.validateLockId(singleton.lockId),
+              instanceId: Validator.validateInstanceId(singleton.instanceId)
+            };
+            this.singletonServices.set(serviceType, validSingleton);
+          } catch (error) {
+            this.logger.warn('Skipping invalid singleton service during load', {
+              singleton: Validator.sanitizeObject(singleton),
+              error: error.message
+            });
+          }
+        }
+      }
+
       this.logger.info('State loaded successfully', {
         allocations: this.allocations.size,
-        instances: this.instances.size
+        instances: this.instances.size,
+        singletonServices: this.singletonServices.size
       });
 
       this.metrics.incrementCounter('state_loads_total');
@@ -1010,6 +1241,12 @@ class StyxyDaemon {
         const allocation = this.allocations.get(port);
         this.allocations.delete(port);
         cleaned++;
+
+        // Feature #1: Release singleton if this was a singleton service
+        const serviceConfig = this.serviceTypes[allocation.serviceType];
+        if (serviceConfig && serviceConfig.instance_behavior === 'single') {
+          this.releaseSingleton(allocation.serviceType);
+        }
 
         this.logger.info('Cleaned stale allocation', {
           port,

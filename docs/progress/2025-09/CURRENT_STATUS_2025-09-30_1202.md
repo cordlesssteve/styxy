@@ -1,9 +1,9 @@
 # Styxy - Current Project Status
-**Last Updated:** 2025-09-30 12:02
-**Previous Version:** [docs/progress/2025-09/CURRENT_STATUS_2025-09-30_1202.md](./docs/progress/2025-09/CURRENT_STATUS_2025-09-30_1202.md)
+**Last Updated:** 2025-09-30
+**Previous Version:** [docs/progress/2025-09/CURRENT_STATUS_2025-09-20_2325.md](./docs/progress/2025-09/CURRENT_STATUS_2025-09-20_2325.md)
 **Active Plan:** [ACTIVE_PLAN.md](./ACTIVE_PLAN.md)
 **Current Branch:** main
-**Project Focus:** Singleton services and smart auto-allocation features
+**Project Focus:** High-performance concurrent port allocation system
 
 ## What's Actually Done ✅
 - [x] Core daemon architecture with Express HTTP API
@@ -54,27 +54,11 @@
 - [x] **NEW**: Robust session hook integration with async daemon startup
 - [x] **NEW**: systemd service with unlimited restart policy configuration
 - [x] **NEW**: Background watchdog monitoring for edge case recovery
-- [x] **NEW**: Feature #1 - Single-Instance Service Configuration (COMPLETE)
-- [x] **NEW**: Configuration schema with `instance_behavior: single` support
-- [x] **NEW**: Singleton service tracking and state management
-- [x] **NEW**: Allocation logic with singleton detection and reuse
-- [x] **NEW**: CLI enhancement with singleton messaging
-- [x] **NEW**: Comprehensive testing suite (unit, integration, E2E) - 51 tests passing
-- [x] **NEW**: Feature #2 - Smart Auto-Allocation (75% complete - phases 2.1-2.4)
-- [x] **NEW**: Auto-allocation configuration schema with validators
-- [x] **NEW**: Range Analyzer with smart placement strategies
-- [x] **NEW**: Config Writer with atomic writes, locking, and backups
-- [x] **NEW**: Audit Logger with JSON logging and rotation
 
 ## In Progress 🟡
-- [Active] Feature #2 - Smart Auto-Allocation (Phase 2.5-2.7 remaining)
-  - ✅ Phase 2.1: Configuration Schema (30 min)
-  - ✅ Phase 2.2: Range Analysis (2 hours)
-  - ✅ Phase 2.3: Config File Writer (1.5 hours)
-  - ✅ Phase 2.4: Audit Logging (1 hour)
-  - ⏳ Phase 2.5: Auto-Allocation Logic (2 hours) - NEXT
-  - ⏳ Phase 2.6: CLI Enhancement (1.5 hours)
-  - ⏳ Phase 2.7: Testing (2 hours)
+- [Planning] Single-Instance Service Configuration (Feature #1)
+- [Planning] Smart Auto-Allocation for Unknown Services (Feature #2)
+- See: [Implementation Plan](docs/plans/IMPLEMENTATION_PLAN_SINGLETON_AND_AUTOALLOC.md)
 
 ## Blocked/Issues ❌
 - None currently identified
@@ -103,26 +87,7 @@
 - `PUT /instance/:id/heartbeat` - Heartbeat updates ✅
 - `POST /cleanup` - Manual cleanup ✅
 
-## Recent Session Achievements (2025-09-30)
-1. **Feature #1 Complete**: Single-Instance Service Configuration
-   - Added `instance_behavior: single` to service type config schema
-   - Implemented singleton service tracking with `singletonServices` Map
-   - Built allocation logic that detects and reuses existing singleton allocations
-   - Integrated cleanup logic to release singletons on port release
-   - Enhanced CLI with clear singleton reuse messaging
-   - Fixed bug: User config service types now properly transformed (port_range → range)
-   - Created comprehensive test suite: 17 unit tests, integration tests, E2E RAG scenario
-   - All 51 tests passing (34 existing + 17 new singleton tests)
-2. **Feature #2 Progress** (Phases 2.1-2.4 Complete):
-   - Configuration schema: Added auto-allocation config with validators
-   - Range Analyzer: Smart placement strategies (after, before, smart) with collision detection
-   - Config Writer: Atomic writes with file locking, backups, and rotation
-   - Audit Logger: JSON logging with rotation, queries, and statistics
-   - All utility components tested and verified working
-3. **Documentation**: Created detailed implementation plan in `docs/plans/IMPLEMENTATION_PLAN_SINGLETON_AND_AUTOALLOC.md`
-4. **Next Steps**: Integrate auto-allocation logic into daemon (Phase 2.5-2.7)
-
-## Previous Session Achievements (2025-09-26)
+## Recent Session Achievements (2025-09-26)
 1. **3-Layer Auto-Recovery System**: Complete implementation of zero manual intervention recovery
    - Layer 1: Fast session hook with async daemon startup (never blocks Claude startup)
    - Layer 2: systemd service with unlimited restart policy and proper configuration

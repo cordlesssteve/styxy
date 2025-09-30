@@ -375,6 +375,169 @@ class Validator {
 
     return { windowMs: window, maxRequests: max };
   }
+
+  /**
+   * Validate instance behavior setting
+   */
+  static validateInstanceBehavior(instanceBehavior) {
+    // If not provided, default to "multi"
+    if (!instanceBehavior) {
+      return 'multi';
+    }
+
+    if (typeof instanceBehavior !== 'string') {
+      throw new Error('instance_behavior must be a string');
+    }
+
+    const normalized = instanceBehavior.toLowerCase();
+    if (normalized !== 'single' && normalized !== 'multi') {
+      throw new Error('instance_behavior must be "single" or "multi"');
+    }
+
+    return normalized;
+  }
+
+  /**
+   * Validate service type configuration
+   */
+  static validateServiceTypeConfig(config) {
+    if (!config || typeof config !== 'object') {
+      throw new Error('Service type configuration must be an object');
+    }
+
+    // Required fields
+    if (!config.description || typeof config.description !== 'string') {
+      throw new Error('Service type must have a description string');
+    }
+
+    if (!Array.isArray(config.port_range) || config.port_range.length !== 2) {
+      throw new Error('Service type must have a port_range array with [start, end]');
+    }
+
+    const [start, end] = config.port_range;
+    this.validatePort(start);
+    this.validatePort(end);
+
+    if (start > end) {
+      throw new Error('Port range start must be less than or equal to end');
+    }
+
+    // Optional fields
+    if (config.instance_behavior) {
+      config.instance_behavior = this.validateInstanceBehavior(config.instance_behavior);
+    }
+
+    return config;
+  }
+
+  /**
+   * Validate auto-allocation configuration (Feature #2)
+   */
+  static validateAutoAllocationConfig(config) {
+    if (!config || typeof config !== 'object') {
+      throw new Error('Auto-allocation configuration must be an object');
+    }
+
+    // Validate enabled flag
+    if (config.enabled !== undefined && typeof config.enabled !== 'boolean') {
+      throw new Error('auto_allocation.enabled must be a boolean');
+    }
+
+    // Validate chunk_size
+    if (config.default_chunk_size !== undefined) {
+      const chunkSize = parseInt(config.default_chunk_size, 10);
+      if (isNaN(chunkSize) || chunkSize < 1 || chunkSize > 1000) {
+        throw new Error('auto_allocation.default_chunk_size must be between 1 and 1000');
+      }
+    }
+
+    // Validate placement strategy
+    if (config.placement !== undefined) {
+      const validPlacements = ['after', 'before', 'smart'];
+      if (!validPlacements.includes(config.placement)) {
+        throw new Error(`auto_allocation.placement must be one of: ${validPlacements.join(', ')}`);
+      }
+    }
+
+    // Validate port boundaries
+    if (config.min_port !== undefined) {
+      this.validatePort(config.min_port);
+    }
+
+    if (config.max_port !== undefined) {
+      this.validatePort(config.max_port);
+    }
+
+    if (config.min_port && config.max_port && config.min_port >= config.max_port) {
+      throw new Error('auto_allocation.min_port must be less than max_port');
+    }
+
+    // Validate preserve_gaps
+    if (config.preserve_gaps !== undefined && typeof config.preserve_gaps !== 'boolean') {
+      throw new Error('auto_allocation.preserve_gaps must be a boolean');
+    }
+
+    // Validate gap_size
+    if (config.gap_size !== undefined) {
+      const gapSize = parseInt(config.gap_size, 10);
+      if (isNaN(gapSize) || gapSize < 0 || gapSize > 1000) {
+        throw new Error('auto_allocation.gap_size must be between 0 and 1000');
+      }
+    }
+
+    return config;
+  }
+
+  /**
+   * Validate auto-allocation rule (Feature #2)
+   */
+  static validateAutoAllocationRule(pattern, rule) {
+    if (!pattern || typeof pattern !== 'string') {
+      throw new Error('Auto-allocation rule pattern must be a non-empty string');
+    }
+
+    if (!rule || typeof rule !== 'object') {
+      throw new Error('Auto-allocation rule must be an object');
+    }
+
+    // Validate chunk_size
+    if (rule.chunk_size !== undefined) {
+      const chunkSize = parseInt(rule.chunk_size, 10);
+      if (isNaN(chunkSize) || chunkSize < 1 || chunkSize > 1000) {
+        throw new Error(`Rule ${pattern}: chunk_size must be between 1 and 1000`);
+      }
+    }
+
+    // Validate placement
+    if (rule.placement !== undefined) {
+      const validPlacements = ['after', 'before', 'smart'];
+      if (!validPlacements.includes(rule.placement)) {
+        throw new Error(`Rule ${pattern}: placement must be one of: ${validPlacements.join(', ')}`);
+      }
+    }
+
+    // Validate preferred_range_start
+    if (rule.preferred_range_start !== undefined) {
+      this.validatePort(rule.preferred_range_start);
+    }
+
+    return rule;
+  }
+
+  /**
+   * Validate all auto-allocation rules (Feature #2)
+   */
+  static validateAutoAllocationRules(rules) {
+    if (!rules || typeof rules !== 'object') {
+      throw new Error('Auto-allocation rules must be an object');
+    }
+
+    for (const [pattern, rule] of Object.entries(rules)) {
+      this.validateAutoAllocationRule(pattern, rule);
+    }
+
+    return rules;
+  }
 }
 
 module.exports = Validator;

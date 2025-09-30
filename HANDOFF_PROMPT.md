@@ -1,53 +1,136 @@
 # Styxy Development Session Handoff
 
-**Session Date:** 2025-09-20
-**Session Focus:** Concurrent Port Allocation Performance Optimization
-**Status:** High-Performance Concurrent System
+**Session Date:** 2025-09-30
+**Session Focus:** Singleton Services & Smart Auto-Allocation Features
+**Status:** Feature #1 Complete, Feature #2 75% Complete
+**Implementation Plan:** [docs/plans/IMPLEMENTATION_PLAN_SINGLETON_AND_AUTOALLOC.md](docs/plans/IMPLEMENTATION_PLAN_SINGLETON_AND_AUTOALLOC.md)
 
 ## Session Summary
 
 ### Major Accomplishments ✅
-1. **Concurrent Port Allocation System Implementation**
-   - Identified and resolved critical performance bottleneck in concurrent requests
-   - Implemented atomic port reservation system preventing race conditions
-   - Achieved 98% performance improvement (1035ms → 25ms for concurrent requests)
-   - Created comprehensive stress testing suite for concurrent scenarios
 
-2. **Multi-Instance Verification**
-   - Confirmed singleton daemon system correctly serves 8 concurrent Claude Code instances
-   - Verified port coordination works seamlessly across multiple development environments
-   - Tested real-world concurrent allocation scenarios with 100% success rate
+#### Feature #1: Single-Instance Service Configuration ✅ (COMPLETE)
+**Problem:** RAG service with ChromaDB required custom flock-based scripts to prevent multiple instances
+**Solution:** Built declarative configuration-based singleton service support
 
-3. **Performance Optimization Deep Dive**
-   - Root cause analysis revealed blocking file I/O during atomic allocation
-   - Implemented non-blocking state persistence with background saves
-   - Maintained data integrity while eliminating serialization bottlenecks
-   - Comprehensive testing validated both performance and safety improvements
+**Implementation:**
+1. **Config Schema** (`config/core-ports.json`)
+   - Added `instance_behavior: "single"` field to service type definitions
+   - AI service type now configured as singleton
+   - Defaults to "multi" for backward compatibility
 
-3. **Previous Session: Port Management System Expansion Complete**
-   - Comprehensive system inventory analysis revealing 11+ unmanaged critical services
-   - Added 4 new service categories: infrastructure, ai, messaging, coordination
-   - Expanded coverage from 13 to 17 service types (~1,600 managed ports)
-   - Fixed critical database/API range overlap (database moved to 5430-5499)
+2. **State Management** (`src/daemon.js`)
+   - Added `singletonServices` Map to track single-instance services
+   - Persists to `daemon.state` file for daemon restart recovery
+   - Methods: `registerSingleton()`, `getSingleton()`, `releaseSingleton()`
 
-2. **Service Category Additions**
-   - **Infrastructure** (6370-6399): Redis, caches, background services
-   - **AI** (11400-11499): Ollama, LLMs, AI inference servers
-   - **Messaging** (9050-9098): Kafka, RabbitMQ, message brokers
-   - **Coordination** (9870-9899): Styxy daemon, service coordinators
+3. **Allocation Logic** (`src/daemon.js:allocatePort()`)
+   - Checks `instance_behavior === 'single'` before allocation
+   - If singleton exists, returns existing allocation with `existing: true`
+   - If new, allocates normally and registers as singleton
 
-3. **System Integration Enhancements**
-   - Integrated Styxy health monitoring into startup health check system
-   - Updated CLI interface to support all new service types
-   - Successfully tested allocations for all new service categories
-   - Updated instance templates for multi-instance coordination
+4. **Cleanup Integration** (`src/daemon.js:releasePort()` & `cleanupStaleAllocations()`)
+   - Releases singleton entry when port is released
+   - Cleanup process also releases stale singletons
+
+5. **CLI Enhancement** (`src/commands/allocate.js`)
+   - Detects `existing: true` in response
+   - Shows clear message: "Service uses single-instance mode"
+   - Displays existing instance info (port, PID, instance ID)
+
+6. **Bug Fix**
+   - Fixed user config transformation: `port_range` → `range` properly transformed
+
+7. **Comprehensive Testing**
+   - **Unit Tests** (`tests/unit/daemon/singleton-allocation.test.js`): 17 tests
+   - **Integration Tests** (`tests/integration/api/singleton-coordination.test.js`): Concurrent requests
+   - **E2E Tests** (`tests/e2e/scenarios/rag-service-multi-claude.test.js`): Real RAG scenario
+   - **Result:** All 51 tests passing (34 existing + 17 new)
+
+**Real-World Impact:**
+- RAG service startup now uses simple config line: `"instance_behavior": "single"`
+- Multiple Claude Code sessions automatically share same RAG port
+- No more custom flock scripts needed
+- State persists across daemon restarts
+
+---
+
+#### Feature #2: Smart Auto-Allocation 🔄 (75% Complete - Phases 2.1-2.4)
+**Problem:** Adding new tools (Grafana, Jaeger) requires manual config editing
+**Solution:** Automatically allocate port ranges for unknown services
+
+**Implementation Progress:**
+
+1. **Phase 2.1: Configuration Schema** ✅
+   - Added `auto_allocation` config section to `config/core-ports.json`
+   - Fields: `enabled`, `default_chunk_size`, `placement`, `min_port`, `max_port`, `preserve_gaps`, `gap_size`
+   - Added `auto_allocation_rules` for pattern-based overrides (e.g., `"monitoring-*": { chunk_size: 20 }`)
+   - Created validators in `src/utils/validator.js`: `validateAutoAllocationConfig()`, `validateAutoAllocationRules()`
+   - All validation tests passing
+
+2. **Phase 2.2: Range Analysis** ✅
+   - Created `src/utils/range-analyzer.js` utility class
+   - **Placement Strategies:**
+     - `"after"`: Append after last range (safest, default)
+     - `"before"`: Prepend before first range
+     - `"smart"`: Find gaps + group similar services (e.g., monitoring tools together)
+   - **Key Methods:**
+     - `findNextAvailableRange()`: Main entry point
+     - `findGapInRanges()`: Detect usable gaps between ranges
+     - `detectCollisions()`: Verify no overlaps
+     - `calculateStatistics()`: Port usage analysis
+   - All placement strategies tested and verified
+
+3. **Phase 2.3: Config File Writer** ✅
+   - Created `src/utils/config-writer.js` utility class
+   - **Safety Features:**
+     - Atomic writes (temp file + rename)
+     - File locking with `proper-lockfile` (prevents concurrent modifications)
+     - Automatic backups before each write (keeps last 10)
+     - JSON validation before committing
+   - **Key Methods:**
+     - `addServiceType()`: Add new service type to user config
+     - `removeServiceType()`: Remove auto-allocated service (for rollback)
+     - `getAutoAllocatedServiceTypes()`: List all auto-allocated services
+     - `restoreFromBackup()`: Rollback to previous config
+   - All operations tested with concurrent access scenarios
+
+4. **Phase 2.4: Audit Logging** ✅
+   - Created `src/utils/audit-logger.js` utility class
+   - **Format:** JSON lines (one event per line)
+   - **Features:**
+     - Automatic log rotation (10MB limit, keeps last 5)
+     - Query methods: `getAuditsByAction()`, `getAuditsByServiceType()`, `getAuditsByTimeRange()`
+     - Statistics: `getStatistics()` provides counts by action and service type
+     - Export: `export()` to JSON file
+   - Each log entry includes: timestamp, action, service type, range, user, PID, hostname
+   - All query operations tested
+
+**Remaining Work (Phases 2.5-2.7):**
+
+**Phase 2.5: Auto-Allocation Logic** (Next - ~2 hours)
+- Integrate components into `src/daemon.js:allocatePort()`
+- Detect unknown service types
+- Call `RangeAnalyzer.findNextAvailableRange()`
+- Call `ConfigWriter.addServiceType()` atomically
+- Call `AuditLogger.log()` for audit trail
+- Reload service types after config update
+- Handle concurrent auto-allocation requests safely
+
+**Phase 2.6: CLI Enhancement** (~1.5 hours)
+- Update `src/commands/allocate.js` to show auto-allocation events
+- Add management commands:
+  - `styxy config auto-allocation status`
+  - `styxy config auto-allocation enable/disable`
+  - `styxy config undo-auto-allocation [service-type]`
+
+**Phase 2.7: Testing** (~2 hours)
+- Unit tests for auto-allocation logic
+- Integration tests: concurrent unknown services
+- E2E test: Grafana scenario
+- Stress test: 10 concurrent unknown services
 
 ### Key Technical Implementations
-- **Atomic Port Reservation**: Implemented `allocationInProgress` Set to prevent race conditions
-- **Non-Blocking State Persistence**: Moved `saveState()` calls to background async operations
-- **Concurrent Safety**: Created `tryAtomicAllocation()` method for atomic port claims
-- **Performance Optimization**: Eliminated 1035ms serialization delay in file I/O
-- **Stress Testing Suite**: Created comprehensive concurrent performance testing tools
 
 ### Files Created/Modified This Session
 - `src/daemon.js` - Implemented concurrent port allocation with atomic safety

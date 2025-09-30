@@ -32,9 +32,22 @@ async function allocate(options) {
     }
 
     if (result.success) {
-      console.log(`✅ ${result.message}`);
-      console.log(`Lock ID: ${result.lock_id}`);
-      console.log(`\nUse this port for your ${options.service} service: ${result.port}`);
+      // Feature #1: Handle singleton service reuse
+      if (result.existing) {
+        console.log(`ℹ️  Service '${options.service}' uses single-instance mode`);
+        console.log(`↪  Connected to existing instance on port ${result.port}`);
+        if (result.existingInstanceId) {
+          console.log(`   Instance: ${result.existingInstanceId}`);
+        }
+        if (result.existingPid) {
+          console.log(`   PID: ${result.existingPid}`);
+        }
+        console.log(`\n💡 Only one instance of this service is allowed across all sessions`);
+      } else {
+        console.log(`✅ ${result.message}`);
+        console.log(`Lock ID: ${result.lock_id}`);
+        console.log(`\nUse this port for your ${options.service} service: ${result.port}`);
+      }
     } else {
       // Check if enhanced error format is available
       if (result.context && result.context.suggestions) {

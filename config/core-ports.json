@@ -2,8 +2,11 @@
   "_meta": {
     "description": "CORE Documentation Standard Port Configuration",
     "source": "~/docs/CORE/PORT_REFERENCE_GUIDE.md v2.0",
-    "last_updated": "2025-01-17",
-    "compliance": "Universal Port Reference Guide"
+    "last_updated": "2025-09-30",
+    "compliance": "Universal Port Reference Guide",
+    "features": {
+      "instance_behavior": "Controls single vs multi-instance allocation behavior (v1.1.0)"
+    }
   },
   "service_types": {
     "dev": {
@@ -109,7 +112,8 @@
       "preferred_ports": [11430, 11431, 11432, 11433],
       "port_range": [11400, 11499],
       "multi_instance_pattern": "sequential",
-      "examples": ["Ollama", "Local LLMs", "AI inference servers"]
+      "instance_behavior": "single",
+      "examples": ["Ollama", "Local LLMs", "AI inference servers", "RAG service", "Embedding models"]
     },
     "messaging": {
       "description": "Message queues and brokers",
@@ -188,13 +192,35 @@
       }
     }
   },
+  "auto_allocation": {
+    "enabled": false,
+    "default_chunk_size": 10,
+    "placement": "after",
+    "min_port": 10000,
+    "max_port": 65000,
+    "preserve_gaps": true,
+    "gap_size": 10
+  },
+  "auto_allocation_rules": {
+    "monitoring-*": {
+      "chunk_size": 20,
+      "placement": "smart",
+      "preferred_range_start": 9000
+    },
+    "database-*": {
+      "chunk_size": 5,
+      "preferred_range_start": 5400
+    }
+  },
   "compliance": {
-    "version": "2.0",
+    "version": "2.1",
     "principles": {
       "1:1_port_mapping": "Container and host ports must be identical",
       "non_overlapping_ranges": "Each service category has dedicated ranges",
       "multi_instance_support": "Support for 4+ concurrent instances per service type",
-      "sequential_allocation": "Ports allocated sequentially within ranges"
+      "sequential_allocation": "Ports allocated sequentially within ranges",
+      "instance_behavior": "Service types can specify 'single' (one instance) or 'multi' (default, multiple instances)",
+      "auto_allocation": "Unknown service types can be automatically allocated port ranges (Feature #2, disabled by default)"
     },
     "validation": {
       "enforce_ranges": true,
