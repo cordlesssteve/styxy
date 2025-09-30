@@ -20,6 +20,9 @@ const StateManager = require('./utils/state-manager');
 const CircuitBreaker = require('./utils/circuit-breaker');
 const Metrics = require('./utils/metrics');
 const { ErrorFactory } = require('./utils/enhanced-errors');
+const RangeAnalyzer = require('./utils/range-analyzer');
+const ConfigWriter = require('./utils/config-writer');
+const AuditLogger = require('./utils/audit-logger');
 
 class StyxyDaemon {
   constructor(options = {}) {
@@ -56,6 +59,12 @@ class StyxyDaemon {
     // Track ports being allocated (prevents race conditions)
     this.allocationInProgress = new Set();
     this.allocationMutex = new Map(); // Port -> Promise (for waiting)
+
+    // FEATURE #2: AUTO-ALLOCATION UTILITIES
+    // Track service types being auto-allocated (prevents concurrent auto-allocation of same type)
+    this.autoAllocationInProgress = new Set();
+    this.configWriter = new ConfigWriter(this.configDir);
+    this.auditLogger = new AuditLogger(this.configDir);
 
     // Express app setup
     this.app = express();
@@ -596,8 +605,7 @@ class StyxyDaemon {
    * Allocate a port for a service (CONCURRENT-SAFE VERSION)
    */
   async allocatePort({ service_type, service_name, preferred_port, instance_id, project_path, userAgent, remoteIP }) {
-    // Validate all inputs
-    const validServiceType = Validator.validateServiceType(service_type, this.serviceTypes);
+    // Validate basic inputs (but allow unknown service types for auto-allocation)
     const validServiceName = service_name ? Validator.validateServiceName(service_name) : 'unnamed-service';
     const validInstanceId = instance_id ? Validator.validateInstanceId(instance_id) : 'default';
     const validProjectPath = project_path ? Validator.validateWorkingDirectory(project_path) : process.cwd();
@@ -607,8 +615,39 @@ class StyxyDaemon {
       validPreferredPort = Validator.validatePort(preferred_port);
     }
 
-    const serviceConfig = this.serviceTypes[validServiceType];
     const requestContext = { userAgent, remoteIP };
+
+    // FEATURE #2: Check if service type exists, if not, attempt auto-allocation
+    let validServiceType = service_type;
+    let autoAllocationInfo = null; // Track if auto-allocation occurred
+    if (!this.serviceTypes[service_type]) {
+      // Unknown service type - try auto-allocation
+      this.logger.info('Unknown service type detected, attempting auto-allocation', {
+        serviceType: service_type,
+        autoAllocationEnabled: this.autoAllocationConfig.enabled
+      });
+
+      try {
+        const allocatedConfig = await this.handleAutoAllocation(service_type, requestContext);
+        validServiceType = service_type; // Now it exists after auto-allocation
+
+        // Store auto-allocation info for response
+        autoAllocationInfo = {
+          auto_allocated: true,
+          allocated_range: allocatedConfig.range,
+          chunk_size: allocatedConfig.range[1] - allocatedConfig.range[0] + 1,
+          placement: this.autoAllocationConfig.placement
+        };
+      } catch (error) {
+        // Auto-allocation failed or disabled - fall back to validation error
+        throw new Error(`Unknown service type '${service_type}': ${error.message}`);
+      }
+    }
+
+    // Validate service type exists (after potential auto-allocation)
+    validServiceType = Validator.validateServiceType(validServiceType, this.serviceTypes);
+
+    const serviceConfig = this.serviceTypes[validServiceType];
 
     // Feature #1: Check for singleton service behavior
     if (serviceConfig.instance_behavior === 'single') {
@@ -669,6 +708,10 @@ class StyxyDaemon {
       }, requestContext);
 
       if (result.success) {
+        // Add auto-allocation info if present
+        if (autoAllocationInfo) {
+          return { ...result, ...autoAllocationInfo };
+        }
         return result;
       } else if (result.reason === 'allocated') {
         allocatedPorts.push(port);
@@ -678,6 +721,143 @@ class StyxyDaemon {
 
     // Use enhanced error with actionable suggestions
     throw ErrorFactory.portRangeExhausted(validServiceType, start, end, allocatedPorts);
+  }
+
+  /**
+   * Handle auto-allocation of unknown service type (Feature #2)
+   * Returns the newly created service type configuration
+   */
+  async handleAutoAllocation(serviceType, requestContext = {}) {
+    // Check if auto-allocation is enabled
+    if (!this.autoAllocationConfig.enabled) {
+      throw new Error(`Unknown service type '${serviceType}' and auto-allocation is disabled`);
+    }
+
+    // Check if already being auto-allocated (prevent duplicate concurrent auto-allocations)
+    if (this.autoAllocationInProgress.has(serviceType)) {
+      // Wait for the concurrent auto-allocation to complete
+      let retries = 0;
+      while (this.autoAllocationInProgress.has(serviceType) && retries < 30) {
+        await new Promise(resolve => setTimeout(resolve, 100));
+        retries++;
+      }
+
+      // After waiting, reload service types and check if it exists now
+      this.serviceTypes = this.loadServiceTypes();
+      if (this.serviceTypes[serviceType]) {
+        return this.serviceTypes[serviceType];
+      }
+
+      throw new Error(`Auto-allocation of '${serviceType}' timed out`);
+    }
+
+    // Mark as in progress
+    this.autoAllocationInProgress.add(serviceType);
+
+    try {
+      this.logger.info('Starting auto-allocation', {
+        serviceType,
+        autoAllocationConfig: this.autoAllocationConfig
+      });
+
+      // Apply auto-allocation rules to determine chunk size
+      const chunkSize = this.getChunkSizeForServiceType(serviceType);
+
+      // Use RangeAnalyzer to find available range
+      const [startPort, endPort] = RangeAnalyzer.findNextAvailableRange(
+        chunkSize,
+        this.autoAllocationConfig.placement,
+        this.autoAllocationConfig,
+        this.serviceTypes,
+        serviceType
+      );
+
+      this.logger.info('Found available range for auto-allocation', {
+        serviceType,
+        range: [startPort, endPort],
+        placement: this.autoAllocationConfig.placement
+      });
+
+      // Use ConfigWriter to atomically add service type
+      const metadata = {
+        description: `Auto-allocated service type for ${serviceType}`,
+        instance_behavior: 'multi',
+        examples: [`${serviceType} service instance`]
+      };
+
+      await this.configWriter.addServiceType(serviceType, [startPort, endPort], metadata);
+
+      this.logger.info('Service type added to configuration', {
+        serviceType,
+        range: [startPort, endPort]
+      });
+
+      // Use AuditLogger to log the auto-allocation event
+      this.auditLogger.log('AUTO_ALLOCATION', {
+        serviceType,
+        range: [startPort, endPort],
+        chunkSize,
+        placement: this.autoAllocationConfig.placement,
+        userAgent: requestContext.userAgent || 'unknown',
+        remoteIP: requestContext.remoteIP || 'unknown'
+      });
+
+      // Reload service types to include the new one
+      this.serviceTypes = this.loadServiceTypes();
+
+      this.logger.info('Service types reloaded after auto-allocation', {
+        serviceType,
+        totalServiceTypes: Object.keys(this.serviceTypes).length
+      });
+
+      // Update metrics
+      this.metrics.incrementCounter('auto_allocations_total', 1, {
+        service_type: serviceType
+      });
+
+      return this.serviceTypes[serviceType];
+
+    } catch (error) {
+      this.logger.error('Auto-allocation failed', {
+        serviceType,
+        error: error.message
+      });
+
+      this.metrics.incrementCounter('auto_allocation_errors_total', 1, {
+        service_type: serviceType
+      });
+
+      throw new Error(`Auto-allocation failed for '${serviceType}': ${error.message}`);
+
+    } finally {
+      // Always release the in-progress marker
+      this.autoAllocationInProgress.delete(serviceType);
+    }
+  }
+
+  /**
+   * Get chunk size for a service type based on auto-allocation rules
+   */
+  getChunkSizeForServiceType(serviceType) {
+    // Check auto-allocation rules for pattern match
+    for (const [pattern, rule] of Object.entries(this.autoAllocationRules)) {
+      if (this.matchesPattern(serviceType, pattern)) {
+        return rule.chunk_size || this.autoAllocationConfig.default_chunk_size;
+      }
+    }
+
+    // Return default chunk size
+    return this.autoAllocationConfig.default_chunk_size;
+  }
+
+  /**
+   * Check if service type matches a pattern (supports wildcards)
+   */
+  matchesPattern(serviceType, pattern) {
+    // Convert pattern to regex (support * wildcard)
+    const regexPattern = pattern.replace(/\*/g, '.*');
+    const regex = new RegExp(`^${regexPattern}$`);
+    return regex.test(serviceType);
   }
 
   /**

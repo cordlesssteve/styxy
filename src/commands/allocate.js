@@ -32,6 +32,15 @@ async function allocate(options) {
     }
 
     if (result.success) {
+      // Feature #2: Show auto-allocation event
+      if (result.auto_allocated) {
+        console.log(`🔧 Service type '${options.service}' was automatically allocated`);
+        console.log(`   New port range: ${result.allocated_range[0]}-${result.allocated_range[1]}`);
+        console.log(`   Chunk size: ${result.chunk_size} ports`);
+        console.log(`   Placement: ${result.placement}`);
+        console.log();
+      }
+
       // Feature #1: Handle singleton service reuse
       if (result.existing) {
         console.log(`ℹ️  Service '${options.service}' uses single-instance mode`);

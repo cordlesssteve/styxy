@@ -97,9 +97,14 @@ program
 program
   .command('config')
   .description('Manage Styxy configuration')
-  .argument('<action>', 'Action to perform (show|validate|generate|instances)')
+  .argument('<action>', 'Action to perform (show|validate|generate|instances|auto-allocation)')
+  .argument('[subcommand]', 'Subcommand for auto-allocation (status|enable|disable|undo|list)')
+  .argument('[serviceType]', 'Service type for undo subcommand')
   .option('-f, --force', 'Force overwrite when generating config')
-  .action(require('./commands/config'));
+  .action((action, subcommand, serviceType, options) => {
+    const config = require('./commands/config');
+    config(action, { ...options, subcommand, serviceType });
+  });
 
 // Health check and diagnostics
 program

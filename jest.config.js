@@ -29,6 +29,11 @@ module.exports = {
     {
       displayName: 'e2e',
       testMatch: ['<rootDir>/tests/e2e/**/*.test.js']
+    },
+    {
+      displayName: 'stress',
+      testMatch: ['<rootDir>/tests/stress/**/*.test.js'],
+      testTimeout: 60000 // 60 seconds for stress tests
     }
   ]
 };
