@@ -231,6 +231,237 @@ styxy allocate --service-type newservice --instance-id test
 
 ---
 
+### 3. IANA Partnership & Open Source Promotion
+**Status:** Proposed
+**Priority:** Low
+**Category:** Community, Standards Compliance, Marketing
+**Requested:** 2025-09-30
+
+**Problem Statement:**
+Port management is a universal developer problem, but most solutions are ad-hoc or enterprise-focused. Styxy provides a lightweight, standards-compliant approach to development port coordination that aligns with IANA port registry principles.
+
+**Opportunity:**
+IANA maintains the authoritative port registry (https://www.iana.org/assignments/service-names-port-numbers/) and could potentially promote tools that help developers follow port allocation best practices.
+
+**Proposed Action:**
+Reach out to IANA to:
+1. Validate Styxy's alignment with IANA port allocation principles
+2. Explore potential listing/mention in IANA developer resources
+3. Request feedback on port management best practices
+4. Investigate partnership opportunities for promoting standards-compliant development tools
+
+**Benefits:**
+- Credibility boost from IANA association
+- Potential exposure to wider developer audience
+- Validation of Styxy's standards-compliant approach
+- Contribution to better port management practices ecosystem
+
+**Implementation Steps:**
+1. Research IANA contact channels and submission processes
+2. Prepare documentation highlighting IANA compliance
+3. Draft partnership/promotion proposal
+4. Submit inquiry and await response
+5. Follow up on feedback and recommendations
+
+**References:**
+- IANA Port Registry: https://www.iana.org/assignments/service-names-port-numbers/service-names-port-numbers.xhtml
+- RFC 6335: IANA Port Number Registry Procedures
+- Styxy IANA compliance: `docs/references/IANA_PORT_REGISTRY.md`
+
+---
+
+### 4. LD_PRELOAD System Call Interception (Research Branch)
+**Status:** Research
+**Priority:** Low
+**Category:** Advanced Interception, OS-Level Integration, Proof of Concept
+**Requested:** 2025-09-30
+
+**Problem Statement:**
+Current Styxy integration requires explicit coordination:
+- PreToolUse hooks only intercept commands Claude Code executes
+- Applications must explicitly request ports via CLI or MCP
+- Manual shell scripts need to call Styxy allocate before running services
+- No coverage for binaries or tools that don't expose port configuration
+
+This creates gaps where port conflicts can still occur if tools are launched outside Styxy's awareness.
+
+**Proposed Solution:**
+Create a research branch exploring OS-level port interception using `LD_PRELOAD` to intercept socket system calls (`socket()`, `bind()`, `listen()`) before they reach the kernel.
+
+**How LD_PRELOAD Interception Works:**
+
+```c
+// libstyxy-intercept.so - Shared library loaded before libc
+
+#include <sys/socket.h>
+#include <netinet/in.h>
+#include <dlfcn.h>
+#include <stdio.h>
+
+// Store original bind() function
+static int (*original_bind)(int, const struct sockaddr *, socklen_t) = NULL;
+
+// Our intercepted bind() function
+int bind(int sockfd, const struct sockaddr *addr, socklen_t addrlen) {
+    // Lazy-load original bind on first call
+    if (!original_bind) {
+        original_bind = dlsym(RTLD_NEXT, "bind");
+    }
+
+    // Only intercept TCP/UDP sockets with port numbers
+    if (addr->sa_family == AF_INET || addr->sa_family == AF_INET6) {
+        struct sockaddr_in *addr_in = (struct sockaddr_in *)addr;
+        uint16_t requested_port = ntohs(addr_in->sin_port);
+
+        // Contact Styxy daemon via HTTP API
+        uint16_t allocated_port = styxy_allocate_port(
+            requested_port,
+            detect_service_type(),
+            getpid()
+        );
+
+        // Transparently rewrite port in socket address structure
+        addr_in->sin_port = htons(allocated_port);
+
+        fprintf(stderr, "[Styxy] Allocated port %d (requested %d)\n",
+                allocated_port, requested_port);
+    }
+
+    // Call original bind() with potentially modified port
+    return original_bind(sockfd, addr, addrlen);
+}
+```
+
+**Usage:**
+```bash
+# Preload interceptor before any command
+LD_PRELOAD=/usr/lib/libstyxy-intercept.so chroma run
+# Application thinks it's binding to default port 8000
+# Actually binds to Styxy-allocated port (e.g., 8023)
+
+# System-wide (add to shell profile)
+export LD_PRELOAD=/usr/lib/libstyxy-intercept.so
+
+# Selective (wrap specific commands)
+alias chroma='LD_PRELOAD=/usr/lib/libstyxy-intercept.so chroma'
+```
+
+**Benefits:**
+- ✅ **100% transparent** - applications unaware of redirection
+- ✅ **Works with any binary** - even closed-source tools
+- ✅ **No application modification** required
+- ✅ **Handles default ports** automatically
+- ✅ **Works with static binaries** (with limitations)
+- ✅ **Catches forgotten port conflicts** - ultimate safety net
+
+**Challenges & Research Areas:**
+
+1. **Platform Support:**
+   - Linux/Unix: Native support via `LD_PRELOAD`
+   - macOS: Uses `DYLD_INSERT_LIBRARIES` (more restricted)
+   - Windows: Requires DLL injection (completely different approach)
+   - **Recommendation:** Start with Linux-only POC
+
+2. **Performance Overhead:**
+   - Every socket syscall goes through interceptor
+   - Need benchmarking: allocate port once, cache decision
+   - Optimize hot path for non-TCP/UDP sockets
+
+3. **Daemon Communication:**
+   - Interceptor must contact Styxy daemon via HTTP
+   - Handle daemon unavailable (fallback to requested port?)
+   - Timeout handling (can't block indefinitely)
+   - Connection pooling to reduce overhead
+
+4. **Security Implications:**
+   - LD_PRELOAD disabled for setuid binaries (security feature)
+   - Container environments may block LD_PRELOAD
+   - SELinux/AppArmor compatibility
+   - Code signing implications on macOS
+
+5. **Service Type Detection:**
+   - Inspect `/proc/self/cmdline` to identify process
+   - Pattern matching to infer service type
+   - Fallback to generic allocation if unknown
+
+6. **Error Handling:**
+   - What if Styxy daemon is down?
+   - What if all ports exhausted?
+   - Graceful degradation strategies
+
+7. **Debugging Complexity:**
+   - Intercepted applications harder to debug
+   - Need comprehensive logging
+   - Toggle mechanism to disable interception
+
+**Implementation Roadmap:**
+
+**Phase 1: Proof of Concept (Linux only)**
+1. Create minimal `libstyxy-intercept.c` intercepting `bind()`
+2. Implement basic HTTP client to contact Styxy daemon
+3. Test with simple Python HTTP server
+4. Benchmark overhead
+
+**Phase 2: Robust Implementation**
+1. Add error handling and fallback strategies
+2. Implement service type auto-detection
+3. Add connection pooling and caching
+4. Comprehensive logging
+
+**Phase 3: Cross-Platform (if feasible)**
+1. macOS support via `DYLD_INSERT_LIBRARIES`
+2. Investigate Windows DLL injection
+3. Container-aware implementation
+
+**Phase 4: Integration**
+1. Package as installable library (.deb, .rpm)
+2. Shell integration scripts
+3. Documentation and examples
+4. Security audit
+
+**Success Criteria:**
+- ✅ Intercepts `bind()` calls without application awareness
+- ✅ Successfully allocates ports from Styxy daemon
+- ✅ < 5ms overhead for port allocation
+- ✅ Graceful fallback when daemon unavailable
+- ✅ Works with common tools (chroma, uvicorn, node servers)
+
+**Risks:**
+- ⚠️ Platform fragmentation (Linux vs macOS vs Windows)
+- ⚠️ Container/security environment incompatibilities
+- ⚠️ Debugging complexity for users
+- ⚠️ Maintenance burden for C/C++ codebase
+- ⚠️ Potential for subtle bugs in syscall interception
+
+**Alternative Approaches to Consider:**
+1. **Kernel module** (more invasive but more powerful)
+2. **eBPF** (modern Linux, less invasive than kernel module)
+3. **ptrace-based** (debugging API, higher overhead)
+4. **FUSE-based /proc manipulation** (creative but fragile)
+
+**References:**
+- LD_PRELOAD tutorial: https://rafalcieslak.wordpress.com/2013/04/02/dynamic-linker-tricks-using-ld_preload-to-cheat-inject-features-and-investigate-programs/
+- dlsym documentation: https://man7.org/linux/man-pages/man3/dlsym.3.html
+- Socket syscalls: https://man7.org/linux/man-pages/man2/socket.2.html
+- eBPF as alternative: https://ebpf.io/
+
+**Recommendation:**
+Create experimental branch `research/ld-preload-interception` for:
+- Learning and documentation
+- Proof of concept implementation
+- Performance benchmarking
+- Feasibility assessment
+
+**DO NOT merge to main** until:
+- Security implications fully understood
+- Cross-platform strategy defined
+- Performance overhead acceptable
+- Maintenance burden assessed
+
+This is a **research project** to explore the limits of transparent port coordination, not a production feature for immediate deployment.
+
+---
+
 ## Completed Features
 (Move features here when implemented)
 

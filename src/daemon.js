@@ -23,6 +23,8 @@ const { ErrorFactory } = require('./utils/enhanced-errors');
 const RangeAnalyzer = require('./utils/range-analyzer');
 const ConfigWriter = require('./utils/config-writer');
 const AuditLogger = require('./utils/audit-logger');
+const HealthMonitor = require('./utils/health-monitor');
+const SystemRecovery = require('./utils/system-recovery');
 
 class StyxyDaemon {
   constructor(options = {}) {
@@ -53,6 +55,7 @@ class StyxyDaemon {
     this.serviceTypes = this.loadServiceTypes();
     this.autoAllocationConfig = this.loadAutoAllocationConfig(); // Feature #2
     this.autoAllocationRules = this.loadAutoAllocationRules(); // Feature #2
+    this.recoveryConfig = this.loadRecoveryConfig(); // Feature #3
     this.portScanner = new PortScanner();
 
     // CONCURRENT ALLOCATION SAFETY
@@ -65,6 +68,14 @@ class StyxyDaemon {
     this.autoAllocationInProgress = new Set();
     this.configWriter = new ConfigWriter(this.configDir);
     this.auditLogger = new AuditLogger(this.configDir);
+
+    // FEATURE #3: HEALTH MONITORING
+    // Initialize health monitor (will start if enabled in config)
+    this.healthMonitor = new HealthMonitor(this);
+
+    // FEATURE #3: SYSTEM RECOVERY
+    // Initialize system recovery (will run on startup if enabled)
+    this.systemRecovery = new SystemRecovery(this);
 
     // Express app setup
     this.app = express();
@@ -253,6 +264,89 @@ class StyxyDaemon {
       });
 
       return {};
+    }
+  }
+
+  /**
+   * Load recovery configuration (Feature #3)
+   */
+  loadRecoveryConfig() {
+    const coreConfigFile = path.join(__dirname, '../config/core-ports.json');
+    const userConfigFile = path.join(this.configDir, 'config.json');
+
+    try {
+      // Default configuration
+      let config = {
+        port_conflict: {
+          enabled: true,
+          check_availability: true,
+          max_retries: 3,
+          backoff_ms: 100,
+          backoff_multiplier: 2
+        },
+        health_monitoring: {
+          enabled: false,
+          check_interval_ms: 30000,
+          max_failures: 3,
+          cleanup_stale_allocations: true
+        },
+        system_recovery: {
+          enabled: false,
+          run_on_startup: false,
+          backup_corrupted_state: true,
+          max_recovery_attempts: 3
+        }
+      };
+
+      // Load from CORE config
+      if (fs.existsSync(coreConfigFile)) {
+        const coreConfig = JSON.parse(fs.readFileSync(coreConfigFile, 'utf8'));
+        if (coreConfig.recovery) {
+          config = { ...config, ...coreConfig.recovery };
+        }
+      }
+
+      // Override with user config
+      if (fs.existsSync(userConfigFile)) {
+        const userConfig = JSON.parse(fs.readFileSync(userConfigFile, 'utf8'));
+        if (userConfig.recovery) {
+          config = { ...config, ...userConfig.recovery };
+        }
+      }
+
+      this.logger.info('Loaded recovery configuration', {
+        port_conflict_enabled: config.port_conflict.enabled,
+        health_monitoring_enabled: config.health_monitoring.enabled,
+        system_recovery_enabled: config.system_recovery.enabled
+      });
+
+      return config;
+    } catch (error) {
+      this.logger.warn('Failed to load recovery config, using defaults', {
+        error: error.message
+      });
+
+      return {
+        port_conflict: {
+          enabled: true,
+          check_availability: true,
+          max_retries: 3,
+          backoff_ms: 100,
+          backoff_multiplier: 2
+        },
+        health_monitoring: {
+          enabled: false,
+          check_interval_ms: 30000,
+          max_failures: 3,
+          cleanup_stale_allocations: true
+        },
+        system_recovery: {
+          enabled: false,
+          run_on_startup: false,
+          backup_corrupted_state: true,
+          max_recovery_attempts: 3
+        }
+      };
     }
   }
 
@@ -890,6 +984,23 @@ class StyxyDaemon {
           return { success: false, reason: 'unavailable' };
         }
 
+        // FEATURE #3: Port Conflict Recovery - Check actual OS-level availability
+        if (this.recoveryConfig.port_conflict.enabled &&
+            this.recoveryConfig.port_conflict.check_availability) {
+          const actuallyAvailable = await this.checkPortActuallyAvailable(port);
+          if (!actuallyAvailable) {
+            this.logger.warn('Port conflict detected - port appears available in state but OS check failed', {
+              port,
+              serviceType: metadata.service_type,
+              serviceName: metadata.service_name
+            });
+            this.metrics.incrementCounter('port_conflicts_detected_total', 1, {
+              service_type: metadata.service_type
+            });
+            return { success: false, reason: 'conflict' };
+          }
+        }
+
         // SUCCESS: Create the allocation
         const result = await this.createAllocation(port, metadata, requestContext);
         return { success: true, ...result };
@@ -1066,6 +1177,71 @@ class StyxyDaemon {
       }
     }
     return false;
+  }
+
+  /**
+   * Check if a port is actually available at OS level (Feature #3: Port Conflict Recovery)
+   * Unlike isPortAvailable(), this ALWAYS checks OS-level availability, even for managed ports.
+   * Used by conflict recovery to detect external processes using our ports.
+   */
+  async checkPortActuallyAvailable(port) {
+    const net = require('net');
+
+    return new Promise((resolve) => {
+      const server = net.createServer();
+      let available = false;
+
+      const cleanup = () => {
+        try {
+          if (server.listening) {
+            server.close();
+          }
+        } catch (err) {
+          // Ignore cleanup errors
+        }
+      };
+
+      // Timeout after 1 second
+      const timeout = setTimeout(() => {
+        cleanup();
+        this.logger.warn('Port availability check timed out', { port });
+        resolve(false); // Assume unavailable on timeout
+      }, 1000);
+
+      server.once('error', (err) => {
+        clearTimeout(timeout);
+        cleanup();
+
+        if (err.code === 'EADDRINUSE') {
+          // Port definitely in use
+          resolve(false);
+        } else {
+          // Other error (EACCES, etc.) - assume unavailable for safety
+          this.logger.warn('Port availability check error', {
+            port,
+            error: err.message,
+            code: err.code
+          });
+          resolve(false);
+        }
+      });
+
+      server.once('listening', () => {
+        clearTimeout(timeout);
+        available = true;
+        cleanup();
+        resolve(true);
+      });
+
+      // Try to bind to the port
+      try {
+        server.listen(port, '127.0.0.1');
+      } catch (err) {
+        clearTimeout(timeout);
+        cleanup();
+        resolve(false);
+      }
+    });
   }
 
   /**
@@ -1279,6 +1455,16 @@ class StyxyDaemon {
       // Load previous state with recovery
       await this.loadState();
 
+      // FEATURE #3: Perform system recovery (Phase 3)
+      const recoveryResults = await this.systemRecovery.performRecoveryOnStartup();
+      if (recoveryResults && !recoveryResults.skipped) {
+        this.logger.info('System recovery completed', {
+          success: recoveryResults.success?.length || 0,
+          failed: recoveryResults.failed?.length || 0,
+          warnings: recoveryResults.warnings?.length || 0
+        });
+      }
+
       // NEW: Perform startup cleanup to clear stale allocations
       await this.performStartupCleanup();
 
@@ -1315,6 +1501,9 @@ class StyxyDaemon {
 
       // Start cleanup interval
       this.startCleanupTimer();
+
+      // Start health monitoring (Feature #3 Phase 2)
+      await this.healthMonitor.startMonitoring();
 
       // Audit successful start
       this.logger.audit('DAEMON_STARTED', {
@@ -1535,6 +1724,11 @@ class StyxyDaemon {
         this.cleanupInterval = null;
       }
 
+      // Stop health monitoring (Feature #3 Phase 2)
+      if (this.healthMonitor) {
+        this.healthMonitor.stopMonitoring();
+      }
+
       // Clean up rate limiter resources
       if (this.rateLimiter) {
         this.rateLimiter.destroy();
@@ -1610,6 +1804,12 @@ class StyxyDaemon {
         if (this.cleanupInterval) {
           clearInterval(this.cleanupInterval);
           this.logger.debug('Cleanup interval cleared');
+        }
+
+        // Stop health monitoring
+        if (this.healthMonitor) {
+          this.healthMonitor.stopMonitoring();
+          this.logger.debug('Health monitoring stopped');
         }
 
         // 3. Save current state

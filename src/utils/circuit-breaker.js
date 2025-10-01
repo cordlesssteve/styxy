@@ -140,6 +140,7 @@ class CircuitBreaker {
   destroy() {
     if (this.monitoringInterval) {
       clearInterval(this.monitoringInterval);
+      this.monitoringInterval = null;
     }
   }
 }

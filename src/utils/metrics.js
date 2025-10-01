@@ -208,12 +208,9 @@ class Metrics {
   destroy() {
     if (this.resetTimer) {
       clearInterval(this.resetTimer);
+      this.resetTimer = null;
     }
   }
 }
 
-// Create singleton instance
-const defaultMetrics = new Metrics();
-
 module.exports = Metrics;
-module.exports.default = defaultMetrics;

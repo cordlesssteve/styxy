@@ -220,6 +220,27 @@
       "preferred_range_start": 5400
     }
   },
+  "recovery": {
+    "port_conflict": {
+      "enabled": true,
+      "check_availability": true,
+      "max_retries": 3,
+      "backoff_ms": 100,
+      "backoff_multiplier": 2
+    },
+    "health_monitoring": {
+      "enabled": false,
+      "check_interval_ms": 30000,
+      "max_failures": 3,
+      "cleanup_stale_allocations": true
+    },
+    "system_recovery": {
+      "enabled": false,
+      "run_on_startup": false,
+      "backup_corrupted_state": true,
+      "max_recovery_attempts": 3
+    }
+  },
   "compliance": {
     "version": "2.1",
     "principles": {
