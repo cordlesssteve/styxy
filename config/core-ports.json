@@ -113,7 +113,15 @@
       "port_range": [11400, 11499],
       "multi_instance_pattern": "sequential",
       "instance_behavior": "single",
-      "examples": ["Ollama", "Local LLMs", "AI inference servers", "RAG service", "Embedding models"]
+      "examples": ["Ollama", "Local LLMs", "AI inference servers", "RAG service", "Embedding models"],
+      "manual_allocations": {
+        "chromadb-conversation-search": {
+          "port": 9999,
+          "description": "ChromaDB for conversation-search MCP vector embeddings (BGE model)",
+          "reason": "Pre-allocated before Styxy integration",
+          "date": "2025-09-30"
+        }
+      }
     },
     "messaging": {
       "description": "Message queues and brokers",
@@ -193,11 +201,11 @@
     }
   },
   "auto_allocation": {
-    "enabled": false,
+    "enabled": true,
     "default_chunk_size": 10,
     "placement": "after",
     "min_port": 10000,
-    "max_port": 65000,
+    "max_port": 49151,
     "preserve_gaps": true,
     "gap_size": 10
   },
