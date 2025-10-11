@@ -12,6 +12,7 @@ const path = require('path');
 const { v4: uuidv4 } = require('uuid');
 const lockfile = require('proper-lockfile');
 const PortScanner = require('./utils/port-scanner');
+const PortObserver = require('./utils/port-observer');
 const Validator = require('./utils/validator');
 const AuthMiddleware = require('./middleware/auth');
 const RateLimiter = require('./middleware/rate-limiter');
@@ -76,6 +77,13 @@ class StyxyDaemon {
     // FEATURE #3: SYSTEM RECOVERY
     // Initialize system recovery (will run on startup if enabled)
     this.systemRecovery = new SystemRecovery(this);
+
+    // OBSERVATION MODE: Passive port monitoring
+    // Track ports bound by ANY process, not just Styxy-allocated ones
+    this.portObserver = new PortObserver({
+      logger: this.logger,
+      scanInterval: options.observationInterval || 10000 // 10 seconds
+    });
 
     // Express app setup
     this.app = express();
@@ -693,12 +701,184 @@ class StyxyDaemon {
         res.status(500).json({ error: 'Failed to retrieve circuit breaker status' });
       }
     });
+
+    // ============================================================
+    // OBSERVATION MODE ENDPOINTS
+    // ============================================================
+
+    /**
+     * GET /observe/:port - Get detailed observation for a specific port
+     * Returns who's using the port, what service, which instance, etc.
+     */
+    this.app.get('/observe/:port', (req, res) => {
+      try {
+        const port = parseInt(req.params.port, 10);
+
+        if (isNaN(port) || port < 1 || port > 65535) {
+          return res.status(400).json({
+            error: 'Invalid port number'
+          });
+        }
+
+        const observation = this.portObserver.getObservation(port);
+
+        if (!observation) {
+          return res.json({
+            port,
+            bound: false,
+            message: 'Port is not currently bound'
+          });
+        }
+
+        res.json({
+          port,
+          bound: true,
+          observation: {
+            pid: observation.pid,
+            process: observation.process,
+            command: observation.command,
+            service_type: observation.service_type,
+            instance_id: observation.instance_id,
+            timestamp: observation.timestamp,
+            duration_ms: Date.now() - observation.timestamp
+          }
+        });
+
+      } catch (error) {
+        this.logger.error('Observe endpoint failed', { error: error.message });
+        res.status(500).json({ error: 'Failed to get port observation' });
+      }
+    });
+
+    /**
+     * GET /observe/all - Get all current port observations
+     * Returns complete visibility into all bound ports
+     */
+    this.app.get('/observe/all', (req, res) => {
+      try {
+        const observations = this.portObserver.getAllObservations();
+        const stats = this.portObserver.getStats();
+
+        res.json({
+          total: observations.length,
+          observations,
+          stats
+        });
+
+      } catch (error) {
+        this.logger.error('Observe all endpoint failed', { error: error.message });
+        res.status(500).json({ error: 'Failed to get all observations' });
+      }
+    });
+
+    /**
+     * GET /suggest/:serviceType - Suggest available ports for a service type
+     * Returns list of free ports that would work for this service
+     */
+    this.app.get('/suggest/:serviceType', (req, res) => {
+      try {
+        let serviceType = req.params.serviceType;
+        const count = parseInt(req.query.count, 10) || 5;
+
+        // Fallback to 'dev' range for unknown service types (LD_PRELOAD integration)
+        const serviceRanges = this.portObserver.getServiceRanges();
+        if (!serviceRanges[serviceType]) {
+          this.logger.debug('Unknown service type, using dev range fallback', {
+            requested: serviceType,
+            fallback: 'dev'
+          });
+          serviceType = 'dev';
+        }
+
+        const suggestions = this.portObserver.suggestPorts(serviceType, count);
+
+        if (suggestions.length === 0) {
+          return res.json({
+            service_type: serviceType,
+            suggestions: [],
+            message: `No available ports found in ${serviceType} range`
+          });
+        }
+
+        res.json({
+          service_type: serviceType,
+          suggestions,
+          count: suggestions.length,
+          message: `Found ${suggestions.length} available port(s)`
+        });
+
+      } catch (error) {
+        this.logger.error('Suggest endpoint failed', { error: error.message });
+        res.status(500).json({ error: 'Failed to suggest ports' });
+      }
+    });
+
+    /**
+     * POST /register-instance - Register a Claude instance with the observer
+     * Allows instances to self-identify for better tracking
+     */
+    this.app.post('/register-instance', (req, res) => {
+      try {
+        let { instance_id, project_path, metadata } = req.body;
+
+        // Auto-generate instance_id from PID if not provided (for LD_PRELOAD integration)
+        if (!instance_id && req.body.pid) {
+          instance_id = `ldpreload-${req.body.pid}`;
+          this.logger.debug('Auto-generated instance_id from PID', {
+            pid: req.body.pid,
+            instance_id
+          });
+        }
+
+        if (!instance_id) {
+          return res.status(400).json({
+            error: 'instance_id is required (or provide pid for auto-generation)'
+          });
+        }
+
+        this.portObserver.registerInstance(instance_id, {
+          project_path,
+          ...metadata
+        });
+
+        this.logger.info('Instance registered', { instance_id, project_path });
+
+        res.json({
+          success: true,
+          instance_id,
+          message: 'Instance registered successfully'
+        });
+
+      } catch (error) {
+        this.logger.error('Register instance failed', { error: error.message });
+        res.status(500).json({ error: 'Failed to register instance' });
+      }
+    });
+
+    /**
+     * GET /observation-stats - Get statistics about observed ports
+     * Provides overview of port usage patterns
+     */
+    this.app.get('/observation-stats', (req, res) => {
+      try {
+        const stats = this.portObserver.getStats();
+
+        res.json({
+          stats,
+          timestamp: new Date().toISOString()
+        });
+
+      } catch (error) {
+        this.logger.error('Observation stats endpoint failed', { error: error.message });
+        res.status(500).json({ error: 'Failed to get observation statistics' });
+      }
+    });
   }
   
   /**
    * Allocate a port for a service (CONCURRENT-SAFE VERSION)
    */
-  async allocatePort({ service_type, service_name, preferred_port, instance_id, project_path, userAgent, remoteIP }) {
+  async allocatePort({ service_type, service_name, preferred_port, instance_id, project_path, userAgent, remoteIP, dry_run }) {
     // Validate basic inputs (but allow unknown service types for auto-allocation)
     const validServiceName = service_name ? Validator.validateServiceName(service_name) : 'unnamed-service';
     const validInstanceId = instance_id ? Validator.validateInstanceId(instance_id) : 'default';
@@ -789,6 +969,25 @@ class StyxyDaemon {
       if (!candidatePorts.includes(port)) {
         candidatePorts.push(port);
       }
+    }
+
+    // DRY RUN MODE: Just return first available port without allocating
+    if (dry_run) {
+      for (const port of candidatePorts) {
+        if (!this.allocations.has(port) && !this.allocationInProgress.has(port)) {
+          return {
+            success: true,
+            port,
+            dry_run: true,
+            message: `Port ${port} would be allocated (dry run mode)`,
+            service_type: validServiceType,
+            service_name: validServiceName
+          };
+        }
+      }
+
+      // No ports available even in dry run
+      throw ErrorFactory.portRangeExhausted(validServiceType, start, end, candidatePorts.filter(p => this.allocations.has(p)));
     }
 
     // Try to allocate from candidate ports using atomic reservation
@@ -1505,6 +1704,10 @@ class StyxyDaemon {
       // Start health monitoring (Feature #3 Phase 2)
       await this.healthMonitor.startMonitoring();
 
+      // Start port observer (Observation Mode)
+      this.portObserver.start();
+      this.logger.info('Port observer started');
+
       // Audit successful start
       this.logger.audit('DAEMON_STARTED', {
         port: this.port,
@@ -1727,6 +1930,11 @@ class StyxyDaemon {
       // Stop health monitoring (Feature #3 Phase 2)
       if (this.healthMonitor) {
         this.healthMonitor.stopMonitoring();
+      }
+
+      // Stop port observer (Observation Mode)
+      if (this.portObserver) {
+        this.portObserver.stop();
       }
 
       // Clean up rate limiter resources

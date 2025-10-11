@@ -66,6 +66,7 @@ styxy-daemon (Main Process)
 
 ## 🚀 Features
 
+### Core Features
 - ✅ **Eliminates ALL race conditions** - single process manages state
 - ✅ **Real-time cleanup** - ports available immediately when services stop
 - ✅ **No filesystem I/O** during normal operations (fast)
@@ -74,6 +75,15 @@ styxy-daemon (Main Process)
 - ✅ **Service-type aware** - understands dev vs test vs storybook requirements
 - ✅ **Process monitoring** - tracks PID + start time for reliable validation
 - ✅ **Auto-recovery** - graceful shutdown and state restoration
+
+### 🆕 Shadow Mode (Passive Notifications)
+- ✅ **In-conversation notices** - Port conflict warnings directly in Claude Code
+- ✅ **Non-blocking design** - Never prevents command execution
+- ✅ **Actionable solutions** - Every notice includes how to fix the issue
+- ✅ **Works in the shadows** - Helps even when Claude doesn't use Styxy directly
+- ✅ **Dual-hook system** - PreToolUse warnings + PostToolUse solutions
+
+**New in v1.0:** Shadow Mode provides real-time port availability context without requiring Claude Code to explicitly use Styxy. See [Shadow Mode Setup](./SHADOW_MODE_SETUP.md) for 5-minute quick start.
 
 ## 📚 API Reference
 
