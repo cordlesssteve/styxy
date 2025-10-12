@@ -24,9 +24,10 @@ class CircuitBreaker {
     this.logger = new Logger({ component: `circuit-breaker-${this.name}` });
 
     // Reset failure count periodically
+    // Use unref() to allow process to exit even if timer is active (important for CLI commands)
     this.monitoringInterval = setInterval(() => {
       this.resetMetrics();
-    }, this.monitoringPeriod);
+    }, this.monitoringPeriod).unref();
   }
 
   async execute(fn) {

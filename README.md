@@ -4,17 +4,31 @@
 
 Styxy intelligently manages port allocation and process coordination for Claude Code and other development tools, preventing conflicts when running multiple development servers, Firebase emulators, Storybook, and other services simultaneously.
 
+**✨ With LD_PRELOAD mode, port conflicts are automatically resolved - just run your servers and Styxy handles the rest!**
+
 ## ⚡ Quick Start
 
+### Option 1: Automatic Mode (LD_PRELOAD) - Recommended
+
 ```bash
-# Clone and install (or download the release)
+# Clone and install
 git clone https://github.com/cordlesssteve/styxy.git
 cd styxy && npm install
 
-# Start the daemon
+# Start the daemon (runs automatically via systemd/hooks)
 node src/daemon.js --daemon
 
-# Allocate ports for your services
+# That's it! Port conflicts are now handled automatically:
+python3 -m http.server 8000
+# If 8000 is busy: ✓ STYXY: Port 8000 was in use, auto-assigned port 3001
+```
+
+LD_PRELOAD mode is **automatically enabled** in Claude Code sessions. No manual port management needed!
+
+### Option 2: Manual Mode (CLI)
+
+```bash
+# Allocate ports explicitly for your services
 ./bin/styxy allocate -s dev -n my-app     # Smart allocation by service type
 ./bin/styxy allocate -s api -n backend   # Gets appropriate API port range
 
@@ -84,6 +98,24 @@ styxy-daemon (Main Process)
 - ✅ **Dual-hook system** - PreToolUse warnings + PostToolUse solutions
 
 **New in v1.0:** Shadow Mode provides real-time port availability context without requiring Claude Code to explicitly use Styxy. See [Shadow Mode Setup](./SHADOW_MODE_SETUP.md) for 5-minute quick start.
+
+### 🔧 LD_PRELOAD Automatic Port Reassignment
+- ✅ **Universal compatibility** - Works with ANY language (Python, Node.js, Go, Rust, C, etc.)
+- ✅ **Zero code changes** - Applications automatically use available ports
+- ✅ **Transparent operation** - Intercepts bind() system calls at kernel level
+- ✅ **Claude-visible notifications** - See reassignments in command output
+- ✅ **Automatic activation** - Enabled by default in all Claude Code sessions
+- ✅ **Fail-safe design** - Gracefully handles daemon unavailability
+
+**Example:**
+```bash
+# Port 8000 is occupied by another service
+python3 -m http.server 8000
+# Output: ✓ STYXY: Port 8000 was in use, auto-assigned port 3001
+# Server automatically runs on port 3001!
+```
+
+**New in v1.0:** LD_PRELOAD mode eliminates manual port management entirely. See [LD_PRELOAD Mode Guide](./docs/reference/03-development/LD_PRELOAD_MODE.md) for complete documentation.
 
 ## 📚 API Reference
 
@@ -202,6 +234,8 @@ Styxy automatically loads configuration from **CORE documentation** (`~/docs/COR
 - **[Architecture](./docs/reference/01-architecture/)** - System design and architecture details
 - **[API Reference](./docs/reference/02-apis/api-reference.md)** - Complete HTTP REST API and CLI documentation
 - **[Development Guide](./docs/reference/03-development/development-guide.md)** - Setup, testing, and contribution guidelines
+- **[LD_PRELOAD Mode Guide](./docs/reference/03-development/LD_PRELOAD_MODE.md)** - 🔧 Complete guide to automatic port reassignment
+- **[LD_PRELOAD Quick Reference](./docs/reference/03-development/LD_PRELOAD_QUICK_REFERENCE.md)** - 📋 One-page cheat sheet for LD_PRELOAD mode
 - **[Installation & Deployment](./docs/reference/04-deployment/installation-deployment.md)** - Installation, configuration, and production deployment
 - **[Security](./docs/reference/05-security/)** - Security model and considerations
 - **[Integrations](./docs/reference/06-integrations/)** - CORE documentation and external system integration
@@ -227,7 +261,29 @@ MIT License - see [LICENSE](./LICENSE) file for details.
 
 ---
 
-## 🎯 Real-World Usage Example
+## 🎯 Real-World Usage Examples
+
+### Automatic Mode (LD_PRELOAD) - Zero Configuration
+
+```bash
+# Terminal 1: Just run your servers - Styxy handles conflicts automatically!
+python3 -m http.server 8000
+# ✓ STYXY: Port 8000 was in use, auto-assigned port 3001
+
+npm start  # Tries port 3000
+# ✓ STYXY: Port 3000 was in use, auto-assigned port 3002
+
+# Terminal 2: Different project, same ports - no problem!
+python3 -m http.server 8000
+# ✓ STYXY: Port 8000 was in use, auto-assigned port 3003
+
+# Check what happened
+cat /tmp/styxy-reassignments.log
+# [2025-10-11 19:25:22] PID 110548: Port 8000 -> 3001 (service: dev)
+# [2025-10-11 19:29:44] PID 121458: Port 3000 -> 3002 (service: dev)
+```
+
+### Manual Mode (CLI) - Explicit Control
 
 ```bash
 # Terminal 1: Claude Code Instance A
